@@ -1,0 +1,41 @@
+[project]
+name = "mas"
+version = "0.1.0"
+description = "A multi-agent system evaluated against the tau2-bench harness."
+readme = "README.md"
+authors = [
+    { name = "sade", email = "sade.khosravi@gmail.com" }
+]
+# Upper bound inherited from tau2, which requires >=3.12,<3.14.
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "tau2",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+]
+
+# tau2 is consumed as a pinned upstream library, never forked.
+# `rev` is the tip of the codex/pine-independent-leaderboard branch; bump it
+# deliberately, and re-run scripts/bootstrap_data.py so code and data agree.
+[tool.uv.sources]
+tau2 = { git = "https://github.com/sierra-research/tau2-bench", rev = "357166111bb6e426f554cdd6ee34245efe1ec3ab" }
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -27,7 +27,8 @@ MANIFEST
 venv/
 env/
 ENV/
-.python-version
+# .python-version is tracked: it pins the interpreter uv provisions.
+!.python-version
 
 # ---- Packaging / dependency tools ----
 pip-log.txt
@@ -93,3 +94,8 @@ desktop.ini
 # ---- Agent / assistant local files ----
 CLAUDE.md
 .claude/
+
+# ---- Vendored upstream data ----
+# tau2 benchmark data, fetched by scripts/bootstrap_data.py. Large (~140M) and
+# pinned to the tau2 rev in pyproject.toml, so it is reproducible, not tracked.
+vendor/
