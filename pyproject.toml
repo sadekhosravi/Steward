@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "tau2",
     "python-dotenv>=1.0.0",
+    "pydantic-ai-slim[openai]>=2.32.1",
 ]
 
 [dependency-groups]
@@ -24,6 +25,10 @@ dev = [
 # deliberately, and re-run scripts/bootstrap_data.py so code and data agree.
 [tool.uv.sources]
 tau2 = { git = "https://github.com/sierra-research/tau2-bench", rev = "357166111bb6e426f554cdd6ee34245efe1ec3ab" }
+
+# Top-level modules under src/. Add an entry when you add a module.
+[tool.uv.build-backend]
+module-name = ["adapters", "agents", "core", "llm", "patterns", "tools", "trace"]
 
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]

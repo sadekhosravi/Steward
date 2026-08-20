@@ -26,6 +26,44 @@ without any explicit wiring.
 
 Simulation results are written to `$TAU2_DATA_DIR/simulations/<run_name>`.
 
+### Models
+
+Each agent picks its own model, so a cheap fast one and a slower stronger one
+can coexist in the same run:
+
+```python
+import llm
+from pydantic_ai import Agent
+
+investigator = Agent(model=llm.get_model("openai/gpt-oss-20b"))
+critic = Agent(
+    model=llm.get_model("anthropic/claude-sonnet-4.5", provider="openrouter"),
+    output_type=Verdict,
+)
+```
+
+`get_model` takes `provider`, `model`, `temperature`, `timeout` and
+`max_tokens`; anything omitted falls back to the `MAS_LLM_*` defaults in
+`.env`. Settings ride on the returned model, so `Agent` needs one argument.
+
+Two independent paths pick models, and they name the same model differently:
+
+| | Configured by | Provider layer |
+|---|---|---|
+| MAS agents | `llm.get_model(...)`, defaults from `MAS_LLM_*` | pydantic-ai |
+| tau2's user simulator | `tau2 run --llm-user` | LiteLLM |
+
+`nvidia` (NVIDIA Build) and `openrouter` are supported. Being listed in a
+catalog does not mean a model is served, or that it does native tool calling
+and structured output -- both of which the Critic and Proposer require. Check
+before adopting one:
+
+```bash
+uv run python scripts/probe_models.py config               # defaults, key presence
+uv run python scripts/probe_models.py list --filter gpt    # provider catalog
+uv run python scripts/probe_models.py check --model <id>   # chat + structured + tools
+```
+
 ### Windows note
 
 The default console codepage cannot encode the emoji tau2 prints. Set
@@ -39,7 +77,7 @@ late for it):
 ## Layout
 
 ```
-src/mas/
+src/
   core/            harness-agnostic primitives; must not import tau2
   agents/          sub-agent implementations (planner, router, critic, ...)
   patterns/        multi-agent topologies, swappable for comparison
@@ -55,9 +93,9 @@ vendor/            pinned benchmark data (gitignored)
 
 Two rules hold the design together:
 
-1. `mas.core` never imports tau2, so sub-agents stay unit-testable without
+1. `core` never imports tau2, so sub-agents stay unit-testable without
    booting a benchmark environment and the patterns stay portable.
-2. Every environment tool call goes out through `mas.adapters.tau2` as
+2. Every environment tool call goes out through `adapters.tau2` as
    `tool_calls` on the emitted message. Sub-agents never invoke a tau2 `Tool`
    object directly -- those are live callables bound to the environment, and
    calling one in-process mutates the scored database without appearing in the

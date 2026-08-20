@@ -2,4 +2,4 @@
 
 These are ours alone (policy retrieval, scratchpad, arithmetic, summarisation)
 and are invisible to the benchmark. Environment tools are *not* defined here --
-they arrive from the harness through `mas.adapters`."""
+they arrive from the harness through `adapters`."""
