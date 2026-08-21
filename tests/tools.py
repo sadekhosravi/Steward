@@ -25,6 +25,14 @@ LOOKUP = ToolDefinition(
 CANCEL = ToolDefinition(
     name="cancel_reservation",
     description="Cancel a reservation.",
-    parameters_json_schema=_RESERVATION_ID,
+    # `reason` is free text, and that is the point of it being here: the toolset
+    # refuses an invented *identifier* before the gate ever runs, so a test of the
+    # pre-gate's broader "was this ever shown?" evidence needs an argument that is
+    # not an identifier to carry it.
+    parameters_json_schema={
+        "type": "object",
+        "properties": {"reservation_id": {"type": "string"}, "reason": {"type": "string"}},
+        "required": ["reservation_id"],
+    },
     metadata={"gated": True},
 )

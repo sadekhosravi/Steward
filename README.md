@@ -144,6 +144,14 @@ This works because tau2's yield semantics and LangGraph's interrupt are the
 same shape, so no bookkeeping is needed to get back to where we paused --
 which is what will let a tool call originate deep inside a sub-agent later.
 
+Before any of that, the tool call has to be well formed. pydantic-ai declares
+each tool's JSON Schema to the model but validates nothing against it, so
+`agents/toolset.py` supplies a validator and a retry budget, and
+`adapters/tau2/schemas.py` first tightens the schema to say what tau2 will really
+accept -- tau2 declares every nested model as "the real thing, or any object at
+all". A malformed call or an invented identifier is refused inside the
+assistant's own run, so it never reaches the environment and never costs a step.
+
 The Kernel itself never calls a model. Reward is binary per task and pass^k
 only counts a task when every trial passes, so variance in control flow is a
 direct score loss.

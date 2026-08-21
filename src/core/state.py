@@ -24,7 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["StewardState", "Obligation", "PendingCall", "ungrounded", "unmet"]
+__all__ = ["StewardState", "Obligation", "PendingCall", "invented", "ungrounded", "unmet"]
 
 
 class PendingCall(BaseModel):
@@ -115,6 +115,53 @@ def ungrounded(arguments: dict[str, Any], observed: list[str]) -> list[str]:
                 missing.append(name)
                 break
     return missing
+
+
+# Argument names whose value is an identifier: something the environment issued
+# and the system can only have been told. Everything else in a tool call can be
+# legitimately rewritten -- a date reformatted, a name recased, a number computed
+# -- and looks invented to a substring test when it is not. Identifiers cannot:
+# there is no correct way to derive `HKD3PS` from anything.
+_IDENTIFIER = ("_id", "_number")
+
+
+def invented(arguments: dict[str, Any], observed: list[str]) -> list[str]:
+    """Identifier arguments whose value was never shown, as `a.b[0].c` paths.
+
+    The narrow, blocking counterpart to `ungrounded`. That one asks the broad
+    question and is only ever evidence, because it cannot tell an invented value
+    from a correctly reformatted one. This asks it where the answer is safe to act
+    on, which makes it the check a tool call can be refused over: every "not found"
+    error in the diagnostic run was an identifier, and they were 41% of all the
+    errors the environment returned.
+    """
+    corpus = "\n".join(observed)
+    return [path for path, value in _identifiers(arguments) if value not in corpus]
+
+
+def _identifiers(value: Any, path: str = "") -> list[tuple[str, str]]:
+    """Every identifier-named string inside a JSON value, with the path to it.
+
+    Recursive because the ones that matter are nested: a payment id lives inside
+    `payment_methods[0]`, a flight number inside `flights[2]`.
+    """
+    if isinstance(value, dict):
+        return [
+            found
+            for name, item in value.items()
+            for found in (
+                [(f"{path}{name}", item)]
+                if isinstance(item, str) and name.endswith(_IDENTIFIER)
+                else _identifiers(item, f"{path}{name}.")
+            )
+        ]
+    if isinstance(value, list):
+        return [
+            found
+            for index, item in enumerate(value)
+            for found in _identifiers(item, f"{path.rstrip('.')}[{index}].")
+        ]
+    return []
 
 
 def _leaves(value: Any) -> list[str]:

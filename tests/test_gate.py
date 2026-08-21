@@ -114,6 +114,22 @@ def proposes_a_cancellation(messages: list[ModelMessage], info: AgentInfo) -> Mo
     return ModelResponse(parts=[call])
 
 
+def cites_a_reason_nobody_gave(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A grounded identifier with an ungrounded justification attached.
+
+    The toolset would refuse an invented id outright, so this is what an
+    ungrounded value looks like by the time the gate is the one deciding.
+    """
+    if any(isinstance(p, ToolReturnPart) for m in messages for p in m.parts):
+        return ModelResponse(parts=[TextPart("Done.")])
+    call = ToolCallPart(
+        "cancel_reservation",
+        {"reservation_id": SEEN_ID, "reason": "storm damage"},
+        tool_call_id="c0",
+    )
+    return ModelResponse(parts=[call])
+
+
 def proposes_a_lookup(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     if any(isinstance(p, ToolReturnPart) for m in messages for p in m.parts):
         return ModelResponse(parts=[TextPart("Found it.")])
@@ -188,7 +204,7 @@ def test_an_unlabelled_tool_is_treated_as_a_write():
         model=FunctionModel(proposes_a_cancellation),
         gate_model=FunctionModel(critic),
     )
-    k.send("t", "cancel it")
+    k.send("t", f"cancel {SEEN_ID}")
 
     assert len(consulted) == 1
 
@@ -200,11 +216,11 @@ def test_an_approved_write_is_emitted_exactly_as_proposed():
     """The proposal is held apart from the pending call so that nothing between
     approval and emission can rewrite it. Approving one action and performing
     another is not an approval."""
-    step = kernel(proposes_a_cancellation, approves).send("t", "cancel it")
+    step = kernel(proposes_a_cancellation, approves).send("t", f"cancel {SEEN_ID}")
 
     assert isinstance(step, Act)
     assert [(c.name, c.arguments) for c in step.calls] == [
-        ("cancel_reservation", {"reservation_id": INVENTED_ID})
+        ("cancel_reservation", {"reservation_id": SEEN_ID})
     ]
 
 
@@ -306,10 +322,10 @@ def test_pre_gate_findings_reach_the_gate():
         seen.append(str(messages[-1].parts[-1].content))
         return approves(messages, info)
 
-    kernel(proposes_a_cancellation, record).send("t", "cancel my flight")
+    kernel(cites_a_reason_nobody_gave, record).send("t", f"cancel {SEEN_ID}")
 
     assert "appears nowhere in what the assistant has been shown" in seen[0]
-    assert "cancel_reservation(reservation_id='H0000X')" in seen[0]
+    assert "reason='storm damage'" in seen[0]
 
 
 def test_the_transcript_shows_the_lookups_not_just_the_talking():
@@ -334,7 +350,7 @@ def test_the_transcript_shows_the_lookups_not_just_the_talking():
 def test_a_gate_that_fumbles_its_answer_is_asked_again():
     """One malformed reply used to be fatal, because the default budget is a
     single retry and a raise inside the gate ends the simulation."""
-    step = kernel(proposes_a_cancellation, fumbles(OUTPUT_RETRIES)).send("t", "cancel it")
+    step = kernel(proposes_a_cancellation, fumbles(OUTPUT_RETRIES)).send("t", f"cancel {SEEN_ID}")
 
     assert isinstance(step, Act)
 

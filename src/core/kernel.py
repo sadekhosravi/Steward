@@ -49,7 +49,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_core import to_jsonable_python
 
 import tracing
-from agents.assistant import build_assistant
+from agents.assistant import Assistant, build_assistant
 from agents.gate import UNAVAILABLE, Approved, Verdict, build_gate, review
 from core.state import PendingCall, StewardState
 
@@ -113,9 +113,7 @@ def _history(state: StewardState) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(state.messages)
 
 
-def _think(
-    state: StewardState, assistant: Agent[None, str | DeferredToolRequests]
-) -> dict[str, Any]:
+def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
     """Ask the assistant what to do next, given everything that has happened.
 
     Also the one place new evidence enters, because it is the one node that sees
@@ -127,6 +125,11 @@ def _think(
         state.prompt,
         message_history=_history(state),
         deferred_tool_results=_results(state),
+        # The ledger as of now, not as of last turn. What just arrived is the most
+        # likely source of an identifier the actor is about to use, and it does not
+        # reach `observed` until this node returns -- so passing the stored ledger
+        # alone would reject a reservation id the customer gave a moment ago.
+        deps=state.observed + seen,
     )
     output = run.output
     calls = (
@@ -197,9 +200,7 @@ def _act(state: StewardState) -> dict[str, Any]:
     return {"tool_results": results, "approved": []}
 
 
-def _escalate(
-    state: StewardState, assistant: Agent[None, str | DeferredToolRequests]
-) -> dict[str, Any]:
+def _escalate(state: StewardState, assistant: Assistant) -> dict[str, Any]:
     """Out of corrections: end the turn by talking to the customer.
 
     The reply is written by the actor rather than canned, so it fits the
@@ -216,6 +217,7 @@ def _escalate(
         deferred_tool_results=DeferredToolResults(calls=denied),
         output_type=str,
         toolsets=[],
+        deps=state.observed,
     )
     return {
         "messages": to_jsonable_python(run.all_messages()),
@@ -258,7 +260,7 @@ def _traced(name: str, node: Callable[[StewardState], dict[str, Any]]):
 
 
 def build_graph(
-    assistant: Agent[None, str | DeferredToolRequests],
+    assistant: Assistant,
     gate: Agent[None, Verdict],
     gated: frozenset[str],
 ) -> Any:
