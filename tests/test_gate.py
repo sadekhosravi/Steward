@@ -19,7 +19,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from agents.gate import NO_FINDINGS, findings, transcript
+from agents.gate import NO_FINDINGS, OUTPUT_RETRIES, UNAVAILABLE, findings, transcript
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
 from core.state import PendingCall
 from tests.tools import CANCEL, LOOKUP
@@ -72,6 +72,27 @@ def always_blocks(messages: list[ModelMessage], info: AgentInfo) -> ModelRespons
         "Blocked",
         {"violation": "Basic economy cannot be modified.", "remediation": "Do not cancel this."},
     )
+
+
+def fumbles(times: int):
+    """Answers in prose `times` times before choosing an output tool.
+
+    The observed failure: a union output type gives the model two output tools to
+    pick between, and a small one sometimes just talks instead.
+    """
+    seen: list[int] = []
+
+    def critic(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(1)
+        if len(seen) <= times:
+            return ModelResponse(parts=[TextPart("Looks fine to me.")])
+        return approves(messages, info)
+
+    return critic
+
+
+def never_answers(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return ModelResponse(parts=[TextPart("Hmm.")])
 
 
 def _retries(messages: list[ModelMessage]) -> list[RetryPromptPart]:
@@ -305,3 +326,34 @@ def test_the_transcript_shows_the_lookups_not_just_the_talking():
     assert "Customer: check HKD3PS" in rendered
     assert "Assistant looks up: get_reservation(reservation_id='HKD3PS')" in rendered
     assert "Result: economy, 1 bag" in rendered
+
+
+# --- when the gate itself fails ---------------------------------------------
+
+
+def test_a_gate_that_fumbles_its_answer_is_asked_again():
+    """One malformed reply used to be fatal, because the default budget is a
+    single retry and a raise inside the gate ends the simulation."""
+    step = kernel(proposes_a_cancellation, fumbles(OUTPUT_RETRIES)).send("t", "cancel it")
+
+    assert isinstance(step, Act)
+
+
+def test_a_gate_that_never_answers_blocks_instead_of_raising():
+    """Refusing is the only honest verdict on an action nobody checked -- and it
+    costs one action, where the exception cost the whole task."""
+    k = kernel(refuses_to_give_up, never_answers)
+    step = k.send("t", "cancel HKD3PS")
+
+    assert isinstance(step, Say)
+    history = str(k.graph.get_state({"configurable": {"thread_id": "t"}}).values["messages"])
+    assert UNAVAILABLE.violation in history
+
+
+def test_a_gate_that_never_answers_emits_no_write():
+    k = kernel(refuses_to_give_up, never_answers)
+    k.send("t", "cancel HKD3PS")
+
+    assert k.graph.get_state({"configurable": {"thread_id": "t"}}).values["observed"] == [
+        "cancel HKD3PS"
+    ]

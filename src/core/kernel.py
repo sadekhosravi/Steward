@@ -35,14 +35,20 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults, ModelRetry
+from pydantic_ai import (
+    Agent,
+    DeferredToolRequests,
+    DeferredToolResults,
+    ModelRetry,
+    UnexpectedModelBehavior,
+)
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
 from pydantic_ai.tools import ToolDefinition
 from pydantic_core import to_jsonable_python
 
 from agents.assistant import build_assistant
-from agents.gate import Approved, Verdict, build_gate, review
+from agents.gate import UNAVAILABLE, Approved, Verdict, build_gate, review
 from core.state import PendingCall, StewardState
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
@@ -160,7 +166,13 @@ def _gate(
     if not any(call.name in writes for call in proposal):
         return {"approved": state.calls, "calls": []}
 
-    verdict = gate.run_sync(review(_history(state), proposal, state.observed)).output
+    try:
+        verdict = gate.run_sync(review(_history(state), proposal, state.observed)).output
+    except UnexpectedModelBehavior:
+        # The gate never produced a usable verdict. Letting that propagate ends
+        # the simulation and scores 0; refusing costs one action and is
+        # recoverable, so an unanswered check fails closed.
+        verdict = UNAVAILABLE
     if isinstance(verdict, Approved):
         return {"approved": state.calls, "calls": []}
 

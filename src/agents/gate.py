@@ -33,6 +33,7 @@ import llm
 from core.state import PendingCall, ungrounded
 
 __all__ = [
+    "UNAVAILABLE",
     "Approved",
     "Blocked",
     "Verdict",
@@ -112,12 +113,31 @@ CAVEAT = (
 NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the conversation."
 
 
+# A union output type gives the model two output tools to choose between, and a
+# 20B model sometimes answers in prose instead of choosing. pydantic-ai's default
+# budget of one retry makes a single fumble raise, and a raise inside the gate
+# takes the whole simulation down: Run 002 lost one that way, and replaying real
+# writes through the gate offline reproduced it in 3 cases out of 8. Retries are
+# cheap; the failure they prevent costs a task outright.
+OUTPUT_RETRIES = 3
+
+# The verdict used when no verdict was reached. Refusing is not a judgement about
+# the action -- it is the only honest thing to say about an action nobody checked,
+# and it is recoverable: the actor proposes again, the gate is asked again, and
+# the revision cap ends the turn by talking to the customer if it never answers.
+UNAVAILABLE = Blocked(
+    violation="The policy check did not complete, so this action was never authorised.",
+    remediation="Propose the same action again.",
+)
+
+
 def build_gate(policy: str, model: str | Model | None = None) -> Agent[None, Verdict]:
     """A gate bound to one domain's policy. The policy is static, the case is not."""
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
         instructions=INSTRUCTIONS.format(policy=policy),
         output_type=[Approved, Blocked],
+        retries={"output": OUTPUT_RETRIES},
     )
 
 
