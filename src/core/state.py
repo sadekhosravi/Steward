@@ -24,7 +24,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["MASState", "Obligation", "PendingCall", "ungrounded", "unmet"]
+__all__ = ["StewardState", "Obligation", "PendingCall", "ungrounded", "unmet"]
 
 
 class PendingCall(BaseModel):
@@ -55,7 +55,7 @@ class Obligation(BaseModel):
     """Literal text the reply must carry. `None` means no reply can clear it."""
 
 
-class MASState(BaseModel):
+class StewardState(BaseModel):
     """The graph schema, and the only place conversation state lives.
 
     Kept JSON-native because the checkpointer serializes it: pydantic-ai's

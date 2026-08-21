@@ -1,6 +1,6 @@
-"""Probe a provider's catalog and check models against what the MAS needs.
+"""Probe a provider's catalog and check models against what the Steward needs.
 
-The MAS design leans on two model capabilities that are uniform across frontier
+The Steward design leans on two model capabilities that are uniform across frontier
 APIs but *not* across self-hosted catalogs: native tool calling and structured
 output. The Critic returning a typed verdict is the spine of the write gate, so
 a model that only manages prose is unusable no matter how well it reasons.
@@ -127,7 +127,7 @@ def show_config(defaults: llm.ModelSpec) -> int:
         present = "set" if os.environ.get(info.api_key_env, "").strip() else "MISSING"
         print(f"  {name:12} {info.api_key_env:20} {present}")
 
-    print("\nDefaults (MAS_LLM_*), used when an agent omits an argument:")
+    print("\nDefaults (STEWARD_LLM_*), used when an agent omits an argument:")
     print(f"  provider     {defaults.provider}")
     print(f"  model        {defaults.model or '(unset)'}")
     print(f"  temperature  {defaults.temperature}")
@@ -155,8 +155,8 @@ def check_models(specs: list[llm.ModelSpec]) -> int:
     if usable:
         best = usable[0]
         print("\nTo use one, put this in .env:")
-        print(f"  MAS_LLM_PROVIDER={best.provider}")
-        print(f"  MAS_LLM_MODEL={best.model}")
+        print(f"  STEWARD_LLM_PROVIDER={best.provider}")
+        print(f"  STEWARD_LLM_MODEL={best.model}")
     return 0 if len(usable) == len(specs) else 1
 
 
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         "--model",
         dest="models",
         action="append",
-        help="model id to probe; repeatable. Defaults to MAS_LLM_MODEL.",
+        help="model id to probe; repeatable. Defaults to STEWARD_LLM_MODEL.",
     )
 
     args = parser.parse_args(argv)
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
 
     names = args.models or ([defaults.model] if defaults.model else [])
     if not names:
-        print("No model to probe. Pass --model, or set MAS_LLM_MODEL in .env.")
+        print("No model to probe. Pass --model, or set STEWARD_LLM_MODEL in .env.")
         return 2
     return check_models([llm.resolve(name, provider=args.provider) for name in names])
 

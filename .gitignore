@@ -105,3 +105,4 @@ vendor/
 # is not, so it is tracked.
 results/*
 !results/reports.md
+!results/log.md

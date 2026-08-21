@@ -1,1 +1,1 @@
-"""Test suite for the MAS package."""
+"""Test suite for the Steward package."""

@@ -2,16 +2,16 @@
 
 Agents pick their own model by argument -- see `llm.get_model` -- so that one
 agent can run on a fast small model and another on a slower, stronger one. The
-`MAS_LLM_*` variables only supply the fallback used when an argument is omitted::
+`STEWARD_LLM_*` variables only supply the fallback used when an argument is omitted::
 
-    MAS_LLM_PROVIDER=nvidia
-    MAS_LLM_MODEL=openai/gpt-oss-120b
-    MAS_LLM_TEMPERATURE=0.0
-    MAS_LLM_TIMEOUT=120
-    MAS_LLM_MAX_TOKENS=
-    MAS_LLM_REASONING_EFFORT=low
+    STEWARD_LLM_PROVIDER=nvidia
+    STEWARD_LLM_MODEL=openai/gpt-oss-120b
+    STEWARD_LLM_TEMPERATURE=0.0
+    STEWARD_LLM_TIMEOUT=120
+    STEWARD_LLM_MAX_TOKENS=
+    STEWARD_LLM_REASONING_EFFORT=low
 
-`LLM_MODEL` is accepted as an alias for `MAS_LLM_MODEL`, since that is the name
+`LLM_MODEL` is accepted as an alias for `STEWARD_LLM_MODEL`, since that is the name
 a provider's own docs use.
 """
 
@@ -44,7 +44,7 @@ DEFAULT_TIMEOUT = 120.0
 # property of the model, not of the system -- see .env.
 DEFAULT_REASONING_EFFORT = None
 
-_PREFIX = "MAS_LLM_"
+_PREFIX = "STEWARD_LLM_"
 
 
 class LLMConfigError(RuntimeError):

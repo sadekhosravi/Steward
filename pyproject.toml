@@ -1,7 +1,7 @@
 [project]
-name = "mas"
+name = "steward"
 version = "0.1.0"
-description = "A multi-agent system evaluated against the tau2-bench harness."
+description = "A customer service agent that can be trusted with the records."
 readme = "README.md"
 authors = [
     { name = "sade", email = "sade.khosravi@gmail.com" }

@@ -13,24 +13,24 @@ KEY = "test-key-not-real"
 
 @pytest.fixture
 def env(monkeypatch):
-    """A clean environment with a usable key and no MAS_LLM_* defaults."""
+    """A clean environment with a usable key and no STEWARD_LLM_* defaults."""
     for name in ("PROVIDER", "MODEL", "TEMPERATURE", "TIMEOUT", "MAX_TOKENS"):
-        monkeypatch.delenv(f"MAS_LLM_{name}", raising=False)
+        monkeypatch.delenv(f"STEWARD_LLM_{name}", raising=False)
     monkeypatch.setenv("NVIDIA_API_KEY", KEY)
     return monkeypatch
 
 
 def test_arguments_win_over_the_environment(env):
-    env.setenv("MAS_LLM_MODEL", "from-env")
-    env.setenv("MAS_LLM_TEMPERATURE", "0.9")
+    env.setenv("STEWARD_LLM_MODEL", "from-env")
+    env.setenv("STEWARD_LLM_TEMPERATURE", "0.9")
     spec = llm.resolve("openai/gpt-oss-20b", temperature=0.0)
     assert spec.model == "openai/gpt-oss-20b"
     assert spec.temperature == 0.0
 
 
 def test_omitted_arguments_fall_back_to_the_environment(env):
-    env.setenv("MAS_LLM_MODEL", "from-env")
-    env.setenv("MAS_LLM_TIMEOUT", "30")
+    env.setenv("STEWARD_LLM_MODEL", "from-env")
+    env.setenv("STEWARD_LLM_TIMEOUT", "30")
     spec = llm.resolve(temperature=0.7)
     assert spec.model == "from-env"
     assert spec.timeout == 30.0
@@ -38,7 +38,7 @@ def test_omitted_arguments_fall_back_to_the_environment(env):
 
 
 def test_two_agents_can_use_different_models_and_providers(env):
-    env.setenv("MAS_LLM_MODEL", "openai/gpt-oss-20b")
+    env.setenv("STEWARD_LLM_MODEL", "openai/gpt-oss-20b")
     fast = llm.resolve()
     strong = llm.resolve("anthropic/claude-sonnet-4.5", provider="openrouter", temperature=0.2)
     assert (fast.provider, fast.model) == ("nvidia", "openai/gpt-oss-20b")
@@ -61,11 +61,11 @@ def test_provider_name_is_normalised(env):
 
 def test_non_numeric_temperature_is_a_config_error():
     with pytest.raises(llm.LLMConfigError, match="must be a number"):
-        llm.env_defaults({"MAS_LLM_TEMPERATURE": "warm"})
+        llm.env_defaults({"STEWARD_LLM_TEMPERATURE": "warm"})
 
 
 def test_max_tokens_is_read_as_an_integer():
-    assert llm.env_defaults({"MAS_LLM_MAX_TOKENS": "512"}).max_tokens == 512
+    assert llm.env_defaults({"STEWARD_LLM_MAX_TOKENS": "512"}).max_tokens == 512
 
 
 def test_settings_omit_anything_left_unset():
@@ -101,7 +101,7 @@ def test_missing_api_key_names_the_variable_to_set(monkeypatch):
 
 
 def test_building_without_a_model_says_what_to_do(env):
-    with pytest.raises(llm.LLMConfigError, match="MAS_LLM_MODEL"):
+    with pytest.raises(llm.LLMConfigError, match="STEWARD_LLM_MODEL"):
         llm.get_model()
 
 

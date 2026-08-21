@@ -1,4 +1,4 @@
-"""LLM provider access for MAS agents.
+"""LLM provider access for Steward agents.
 
 One call gives an agent a fully configured model, settings included:
 
@@ -12,7 +12,7 @@ One call gives an agent a fully configured model, settings included:
 
     investigator = Agent(model=llm.get_model("openai/gpt-oss-20b"))
 
-Every argument is optional; anything omitted falls back to the `MAS_LLM_*`
+Every argument is optional; anything omitted falls back to the `STEWARD_LLM_*`
 environment defaults, so the model can be changed without touching code. To
 suppress a setting entirely rather than default it, build a `ModelSpec` with
 that field set to `None` and pass it to `build_model`.
@@ -66,7 +66,7 @@ def resolve(
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
 ) -> ModelSpec:
-    """Fill in whatever was not passed from the `MAS_LLM_*` environment defaults."""
+    """Fill in whatever was not passed from the `STEWARD_LLM_*` environment defaults."""
     defaults = env_defaults()
     return ModelSpec(
         provider=(provider or defaults.provider).strip().lower(),

@@ -1,9 +1,9 @@
 """tau2's own CLI, with our agent registered first.
 
-    uv run python scripts/run_bench.py run --domain mock --agent mas \
+    uv run python scripts/run_bench.py run --domain mock --agent steward \
         --agent-llm openai/gpt-oss-20b --user-llm nvidia_nim/openai/gpt-oss-20b
 
-Every `tau2 ...` command works here; the only difference is that `--agent mas`
+Every `tau2 ...` command works here; the only difference is that `--agent steward`
 resolves. On Windows set PYTHONUTF8=1 first.
 """
 

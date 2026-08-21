@@ -1,6 +1,9 @@
-# MAS
+# Steward
 
-A multi-agent system, evaluated against [tau2-bench](https://github.com/sierra-research/tau2-bench).
+A customer service agent that can be trusted with the records. It serves
+customers under a company policy it must actually follow, and no action
+reaches the database that a second agent has not authorised. Evaluated
+against [tau2-bench](https://github.com/sierra-research/tau2-bench).
 
 tau2 is consumed as a **pinned upstream library**, never forked. It supplies the
 domains, policies, tools, user simulator and scoring; everything about how the
@@ -43,14 +46,14 @@ critic = Agent(
 ```
 
 `get_model` takes `provider`, `model`, `temperature`, `timeout` and
-`max_tokens`; anything omitted falls back to the `MAS_LLM_*` defaults in
+`max_tokens`; anything omitted falls back to the `STEWARD_LLM_*` defaults in
 `.env`. Settings ride on the returned model, so `Agent` needs one argument.
 
 Two independent paths pick models, and they name the same model differently:
 
 | | Configured by | Provider layer |
 |---|---|---|
-| MAS agents | `llm.get_model(...)`, defaults from `MAS_LLM_*` | pydantic-ai |
+| Steward agents | `llm.get_model(...)`, defaults from `STEWARD_LLM_*` | pydantic-ai |
 | tau2's user simulator | `tau2 run --llm-user` | LiteLLM |
 
 `nvidia` (NVIDIA Build) and `openrouter` are supported. Being listed in a
@@ -108,7 +111,7 @@ tau2 has no plugin discovery, so registration has to happen in the same process
 before the runner starts. Every `tau2 ...` command works through it.
 
 ```bash
-uv run python scripts/run_bench.py run --domain mock --agent mas \
+uv run python scripts/run_bench.py run --domain mock --agent steward \
     --agent-llm openai/gpt-oss-20b --user-llm nvidia_nim/openai/gpt-oss-20b
 ```
 

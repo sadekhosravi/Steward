@@ -116,7 +116,7 @@ def _construct(spec: ModelSpec) -> Model:
     info = get_provider(spec.provider)
     if not spec.model:
         raise LLMConfigError(
-            "no model given; pass model=... or set MAS_LLM_MODEL (or LLM_MODEL) in .env. "
+            "no model given; pass model=... or set STEWARD_LLM_MODEL (or LLM_MODEL) in .env. "
             f"Available {info.name} models: {info.catalog_url}"
         )
     key = api_key_for(spec.provider)

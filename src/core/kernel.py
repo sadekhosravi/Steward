@@ -43,7 +43,7 @@ from pydantic_core import to_jsonable_python
 
 from agents.assistant import build_assistant
 from agents.gate import Approved, Verdict, build_gate, review
-from core.state import MASState, PendingCall
+from core.state import PendingCall, StewardState
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -84,7 +84,7 @@ class Act:
 Step = Say | Act
 
 
-def _results(state: MASState) -> DeferredToolResults | None:
+def _results(state: StewardState) -> DeferredToolResults | None:
     """Answers for the calls we last yielded: what came back, and what was refused.
 
     A refusal is a `ModelRetry`, pydantic-ai's own vehicle for "that call was
@@ -101,11 +101,13 @@ def _results(state: MASState) -> DeferredToolResults | None:
     )
 
 
-def _history(state: MASState) -> list[ModelMessage]:
+def _history(state: StewardState) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(state.messages)
 
 
-def _think(state: MASState, assistant: Agent[None, str | DeferredToolRequests]) -> dict[str, Any]:
+def _think(
+    state: StewardState, assistant: Agent[None, str | DeferredToolRequests]
+) -> dict[str, Any]:
     """Ask the assistant what to do next, given everything that has happened.
 
     Also the one place new evidence enters, because it is the one node that sees
@@ -140,7 +142,9 @@ def _think(state: MASState, assistant: Agent[None, str | DeferredToolRequests]) 
     }
 
 
-def _gate(state: MASState, gate: Agent[None, Verdict], writes: frozenset[str]) -> dict[str, Any]:
+def _gate(
+    state: StewardState, gate: Agent[None, Verdict], writes: frozenset[str]
+) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
     A step with no write in it is approved without a model call: reads cannot
@@ -169,7 +173,7 @@ def _gate(state: MASState, gate: Agent[None, Verdict], writes: frozenset[str]) -
     }
 
 
-def _act(state: MASState) -> dict[str, Any]:
+def _act(state: StewardState) -> dict[str, Any]:
     """The yield point, and nothing else.
 
     LangGraph re-runs a node from the top when it resumes, so anything with a
@@ -181,7 +185,7 @@ def _act(state: MASState) -> dict[str, Any]:
 
 
 def _escalate(
-    state: MASState, assistant: Agent[None, str | DeferredToolRequests]
+    state: StewardState, assistant: Agent[None, str | DeferredToolRequests]
 ) -> dict[str, Any]:
     """Out of corrections: end the turn by talking to the customer.
 
@@ -209,12 +213,12 @@ def _escalate(
     }
 
 
-def _route_think(state: MASState) -> Literal["gate", "__end__"]:
+def _route_think(state: StewardState) -> Literal["gate", "__end__"]:
     """Tool calls go to the gate; anything else ends the turn."""
     return "gate" if state.calls else END
 
 
-def _route_gate(state: MASState) -> Literal["act", "think", "escalate"]:
+def _route_gate(state: StewardState) -> Literal["act", "think", "escalate"]:
     """Approved work is emitted; a refusal goes back for a rewrite, until it cannot."""
     if state.approved:
         return "act"
@@ -226,7 +230,7 @@ def build_graph(
     gate: Agent[None, Verdict],
     writes: frozenset[str],
 ) -> Any:
-    graph = StateGraph(MASState)
+    graph = StateGraph(StewardState)
     graph.add_node("think", partial(_think, assistant=assistant))
     graph.add_node("gate", partial(_gate, gate=gate, writes=writes))
     graph.add_node("act", _act)

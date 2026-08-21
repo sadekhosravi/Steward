@@ -6,7 +6,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
-from core.state import MASState, Obligation, ungrounded, unmet
+from core.state import Obligation, StewardState, ungrounded, unmet
 from tests.tools import LOOKUP
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
@@ -60,7 +60,7 @@ def test_an_obligation_with_no_wording_cannot_be_cleared_by_replying():
 
 def test_the_ledgers_start_empty():
     """A fresh conversation owes nothing and has seen nothing."""
-    state = MASState()
+    state = StewardState()
     assert (state.approved, state.observed, state.obligations) == ([], [], [])
 
 

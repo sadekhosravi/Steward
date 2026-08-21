@@ -81,7 +81,7 @@ def _to_tau2(step: Step) -> AssistantMessage:
     return AssistantMessage.text(step.text)
 
 
-class MASAgent(HalfDuplexAgent[AgentState]):
+class StewardAgent(HalfDuplexAgent[AgentState]):
     """The agent-under-test, as tau2 sees it."""
 
     def __init__(
