@@ -78,7 +78,7 @@ late for it):
 
 ```
 src/
-  core/            harness-agnostic primitives; must not import tau2
+  core/            the Kernel (LangGraph graph) and harness-agnostic primitives
   agents/          sub-agent implementations (planner, router, critic, ...)
   patterns/        multi-agent topologies, swappable for comparison
   tools/           private tools, invisible to the benchmark
@@ -100,6 +100,36 @@ Two rules hold the design together:
    object directly -- those are live callables bound to the environment, and
    calling one in-process mutates the scored database without appearing in the
    trajectory.
+
+## Running the benchmark
+
+`scripts/run_bench.py` is tau2's own CLI with our agent registered first --
+tau2 has no plugin discovery, so registration has to happen in the same process
+before the runner starts. Every `tau2 ...` command works through it.
+
+```bash
+uv run python scripts/run_bench.py run --domain mock --agent mas \
+    --agent-llm openai/gpt-oss-20b --user-llm nvidia_nim/openai/gpt-oss-20b
+```
+
+`--agent-llm` takes a plain model id (resolved by `llm`); `--user-llm` takes a
+LiteLLM name, because tau2's user simulator is on a separate provider path.
+
+## How a turn runs
+
+The Kernel is a LangGraph graph with two nodes. `think` asks a pydantic-ai
+agent what to do; `act` is a bare `interrupt()`. If the agent wants tool calls,
+the graph pauses, the adapter emits them as `tool_calls`, tau2 runs them
+against the real environment, and `resume()` continues inside `act` with the
+results. If the agent has something to say instead, the turn ends.
+
+This works because tau2's yield semantics and LangGraph's interrupt are the
+same shape, so no bookkeeping is needed to get back to where we paused --
+which is what will let a tool call originate deep inside a sub-agent later.
+
+The Kernel itself never calls a model. Reward is binary per task and pass^k
+only counts a task when every trial passes, so variance in control flow is a
+direct score loss.
 
 ## Updating tau2
 

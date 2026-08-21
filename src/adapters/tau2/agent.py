@@ -1,23 +1,16 @@
-"""A single pydantic-ai agent behind the tau2 seam.
+"""The tau2 seam: translation between tau2's message types and the Kernel.
 
-tau2 hands us a message and expects back either text or tool calls. Emitting
+tau2 hands us a message and expects back either text or tool calls; emitting
 tool calls returns control to the environment, which runs them and calls us
-again with the results -- pydantic-ai calls tools with that shape *deferred*:
-declared to the model, executed by someone else. Because the two sides agree,
-this adapter is almost entirely translation between their message types.
-
-This is the seam only. The multi-agent system replaces the one `Agent` below;
-everything else here stays as it is.
+again with the results. The Kernel pauses on exactly that boundary, so this
+module is only translation -- no decisions are taken here.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults
-from pydantic_ai.messages import ModelMessage
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.toolsets import ExternalToolset
 from tau2.agent.base_agent import HalfDuplexAgent, ValidAgentInputMessage
 from tau2.data_model.message import (
     AssistantMessage,
@@ -28,30 +21,21 @@ from tau2.data_model.message import (
 )
 from tau2.environment.tool import Tool
 
-import llm
-
-INSTRUCTIONS = """
-You are a customer service agent. Help the user by following the policy below.
-Each turn you either send a message to the user or make tool calls, never both.
-
-<policy>
-{domain_policy}
-</policy>
-""".strip()
+from core.kernel import Act, Kernel, Step
 
 
 @dataclass
 class AgentState:
-    """tau2 never serializes agent state, so pydantic-ai's own messages live here."""
+    """tau2's per-conversation state: a handle into the Kernel's checkpointer."""
 
-    messages: list[ModelMessage] = field(default_factory=list)
+    thread: str
 
 
 def _tool_def(tool: Tool) -> ToolDefinition:
-    """Describe a tau2 tool to the model without binding its callable.
+    """Describe a tau2 tool without binding its callable.
 
-    Calling a `Tool` in-process would mutate the scored database without the
-    call ever appearing in the trajectory, so only the schema crosses over.
+    Calling a `Tool` in-process would mutate the scored database without the call
+    ever appearing in the trajectory, so only the schema crosses over.
     """
     schema = tool.openai_schema["function"]
     return ToolDefinition(
@@ -61,32 +45,32 @@ def _tool_def(tool: Tool) -> ToolDefinition:
     )
 
 
-def _to_pydantic_ai(
-    message: ValidAgentInputMessage,
-) -> tuple[str | None, DeferredToolResults | None]:
-    """A tau2 input message as either a user prompt or results for pending calls."""
+def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
+    """Results for the calls we yielded last turn, or None if this is a user turn.
+
+    tau2 preserves `ToolCall.id` as `ToolMessage.id`, which is the same key the
+    Kernel resumes on, so routing needs no bookkeeping of its own.
+    """
     if isinstance(message, MultiToolMessage):
         tool_messages = message.tool_messages
     elif isinstance(message, ToolMessage):
         tool_messages = [message]
     else:
-        return message.content, None
-    # tau2 preserves ToolCall.id as ToolMessage.id, which is the key pydantic-ai
-    # matches results back to the calls it emitted last turn.
-    return None, DeferredToolResults(calls={m.id: m.content or "" for m in tool_messages})
+        return None
+    return {m.id: m.content or "" for m in tool_messages}
 
 
-def _to_tau2(output: str | DeferredToolRequests) -> AssistantMessage:
-    """A pydantic-ai run output as a tau2 assistant message: text XOR tool calls."""
-    if isinstance(output, DeferredToolRequests):
+def _to_tau2(step: Step) -> AssistantMessage:
+    """A Kernel step as a tau2 assistant message: text XOR tool calls."""
+    if isinstance(step, Act):
         return AssistantMessage(
             role="assistant",
             tool_calls=[
-                ToolCall(id=call.tool_call_id, name=call.tool_name, arguments=call.args_as_dict())
-                for call in output.calls
+                ToolCall(id=call.id, name=call.name, arguments=call.arguments)
+                for call in step.calls
             ],
         )
-    return AssistantMessage.text(output)
+    return AssistantMessage.text(step.text)
 
 
 class MASAgent(HalfDuplexAgent[AgentState]):
@@ -94,24 +78,17 @@ class MASAgent(HalfDuplexAgent[AgentState]):
 
     def __init__(self, tools: list[Tool], domain_policy: str, model: str | None = None):
         super().__init__(tools=tools, domain_policy=domain_policy)
-        self.agent = Agent(
-            model=llm.get_model(model),
-            instructions=INSTRUCTIONS.format(domain_policy=domain_policy),
-            toolsets=[ExternalToolset([_tool_def(t) for t in tools])],
-            output_type=[str, DeferredToolRequests],
-        )
+        self.kernel = Kernel([_tool_def(t) for t in tools], domain_policy, model)
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:
-        return AgentState()
+        return AgentState(thread=self.kernel.new_thread())
 
     def generate_next_message(
         self, message: ValidAgentInputMessage, state: AgentState
     ) -> tuple[AssistantMessage, AgentState]:
-        prompt, tool_results = _to_pydantic_ai(message)
-        run = self.agent.run_sync(
-            prompt,
-            message_history=state.messages,
-            deferred_tool_results=tool_results,
-        )
-        state.messages = run.all_messages()
-        return _to_tau2(run.output), state
+        results = _tool_results(message)
+        if results is None:
+            step = self.kernel.send(state.thread, message.content)
+        else:
+            step = self.kernel.resume(state.thread, results)
+        return _to_tau2(step), state

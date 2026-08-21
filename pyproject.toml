@@ -12,6 +12,7 @@ dependencies = [
     "tau2",
     "python-dotenv>=1.0.0",
     "pydantic-ai-slim[openai]>=2.32.1",
+    "langgraph>=1.2.11",
 ]
 
 [dependency-groups]
