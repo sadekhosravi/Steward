@@ -1,12 +1,18 @@
-"""GATE: the critic that stands between a proposed write and the environment.
+"""GATE: the critic that stands between an irreversible action and the environment.
 
 Reads are free. Exploring the database costs nothing and is never scored, so a
 wrong read wastes a step and nothing more. A wrong *write* is fatal: the DB
 component compares the final database against a gold replay, one bad mutation
 loses the task outright, and no amount of good conversation afterwards recovers
 it. The baseline measured exactly that shape -- 89% on communication, 39% on the
-database, 5.6% recall on write actions -- which is why this node exists and why
-it fires on writes only.
+database, 5.6% recall on write actions -- which is why this node exists.
+
+Handing the customer to a human is reviewed on the same footing, because it is
+irreversible in the same way: the conversation ends and every task still open
+ends with it. tau2 labels it `mutates_state=False`, so the first version of this
+gate never saw one. The diagnostic run showed what that cost -- the actor
+transferred in 32 of 50 simulations, correct in about one, and scored well for it
+on the tasks where doing nothing happened to be the right database state.
 
 Its authority is the policy and nothing else. A critic that blocks whenever it
 feels unsure is worse than no critic: it turns tasks the actor would have solved
@@ -69,8 +75,9 @@ there is no way to express a block without a fix, or a pass with a complaint."""
 
 INSTRUCTIONS = """
 You are a policy gate. An assistant is serving a customer and wants to perform an
-action that changes the company's records. Nothing has happened yet -- your answer
-decides whether it happens at all.
+action that cannot be taken back: a change to the company's records, or handing
+the customer to a human, which ends the conversation. Nothing has happened yet --
+your answer decides whether it happens at all.
 
 Approve unless the policy forbids it. The policy below is your only authority. If
 it does not prohibit this action, approve it. Do not invent requirements, do not
@@ -82,6 +89,13 @@ Block when the policy states a condition that has not been met: a check the
 assistant skipped, a confirmation the customer never gave, an option the customer
 is not entitled to, or a value the assistant does not actually have. Say which
 rule, and say what to do next.
+
+A handoff to a human is judged the other way round. It is not a way of being
+careful -- it abandons the customer, and everything still outstanding is left
+undone. Approve one only where the policy actually calls for it, or where the
+customer asked for a human. Being unsure, finding the request awkward, or facing
+a request the policy refuses are not grounds: a refusal the assistant can state
+itself is the assistant's job, not a reason to transfer.
 
 <policy>
 {policy}

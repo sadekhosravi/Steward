@@ -36,9 +36,25 @@ from typing import Any
 
 from langfuse import Langfuse, get_client, propagate_attributes
 
-__all__ = ["BULK", "enabled", "flush", "session", "setup", "shutdown", "span", "visible"]
+__all__ = [
+    "BULK",
+    "enabled",
+    "flush",
+    "label",
+    "session",
+    "setup",
+    "shutdown",
+    "span",
+    "visible",
+]
 
 _client: Langfuse | None = None
+
+# Facts about the whole run, repeated on every session so a trace can be told
+# apart from the one beside it. Without them a scripted test and a 200-task
+# benchmark look identical in the session list, which is a real way to lose an
+# afternoon.
+_labels: dict[str, str] = {}
 
 # State the Kernel carries that is not worth shipping on every node span. The
 # pydantic-ai message history is already on the generation spans in full, and
@@ -74,6 +90,11 @@ def enabled() -> bool:
     return _client is not None
 
 
+def label(**metadata: str | None) -> None:
+    """Describe the run: domain, model, run name. Empty values are dropped."""
+    _labels.update({key: value for key, value in metadata.items() if value})
+
+
 class _Ignored:
     """Stands in for a span when tracing is off, and answers to the same calls."""
 
@@ -103,7 +124,11 @@ def session(thread: str) -> Iterator[None]:
     if _client is None:
         yield
         return
-    with propagate_attributes(session_id=thread):
+    with propagate_attributes(
+        session_id=thread,
+        metadata=_labels or None,
+        tags=sorted(_labels.values()) or None,
+    ):
         yield
 
 
@@ -134,3 +159,4 @@ def shutdown() -> None:
     Agent.instrument_all(False)
     _client.shutdown()
     _client = None
+    _labels.clear()

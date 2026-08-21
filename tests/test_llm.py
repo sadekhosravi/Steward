@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 import pytest
 
 import llm
+import llm.config
 
 KEY = "test-key-not-real"
 
 
 @pytest.fixture
 def env(monkeypatch):
-    """A clean environment with a usable key and no STEWARD_LLM_* defaults."""
-    for name in ("PROVIDER", "MODEL", "TEMPERATURE", "TIMEOUT", "MAX_TOKENS"):
-        monkeypatch.delenv(f"STEWARD_LLM_{name}", raising=False)
+    """A clean environment with a usable key and no configured defaults.
+
+    Cleared by prefix rather than by name. A hand-written list goes stale the
+    moment a setting is added, and it fails in the worst way: silently, and only
+    once something else in the run happens to call `load_dotenv()` first -- which
+    tau2 does at import. Anything `llm` reads, this has to remove.
+    """
+    for name in list(os.environ):
+        if name.startswith(llm.config._PREFIX):
+            monkeypatch.delenv(name)
+    monkeypatch.delenv(llm.config._MODEL_ALIAS, raising=False)
     monkeypatch.setenv("NVIDIA_API_KEY", KEY)
     return monkeypatch
 

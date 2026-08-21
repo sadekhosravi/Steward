@@ -33,6 +33,17 @@ class AgentState:
     thread: str
 
 
+# Ending the conversation is irreversible, and tau2 does not label it that way:
+# `transfer_to_human_agents` touches no table, so `mutates_state` is False and a
+# gate keyed on writes alone never reviews the single most damaging action
+# available. The diagnostic run made the cost plain -- 48 transfer calls across 50
+# tasks, the second most-used tool in the run, correct for one of them. Named here
+# rather than in the Kernel because it is a fact about tau2's toolset, and `core`
+# does not import tau2. tau2 spells it the same way in every domain
+# (`LLMSoloAgent.TRANSFER_TOOL_NAME`).
+HANDOFF = frozenset({"transfer_to_human_agents"})
+
+
 def _tool_def(tool: Tool) -> ToolDefinition:
     """Describe a tau2 tool without binding its callable.
 
@@ -40,16 +51,18 @@ def _tool_def(tool: Tool) -> ToolDefinition:
     ever appearing in the trajectory, so only the schema crosses over -- plus the
     one label the gate needs. `mutates_state` is set by tau2's `is_tool`
     decorator on the underlying function, which makes "is this a write?" a fact
-    about the domain rather than something we have to guess or maintain a list
-    of. `ToolDefinition.metadata` is not sent to the model, so carrying it there
-    costs nothing in the prompt.
+    about the domain rather than something we have to guess or maintain a list of.
+    What the gate routes on is the wider question -- can this be taken back? -- so
+    the handoff is folded in here. `ToolDefinition.metadata` is not sent to the
+    model, so carrying it there costs nothing in the prompt.
     """
     schema = tool.openai_schema["function"]
+    mutates = getattr(tool._func, MUTATES_STATE_ATTR, True)
     return ToolDefinition(
         name=schema["name"],
         description=schema["description"],
         parameters_json_schema=schema["parameters"],
-        metadata={"mutates_state": getattr(tool._func, MUTATES_STATE_ATTR, True)},
+        metadata={"gated": mutates or schema["name"] in HANDOFF},
     )
 
 

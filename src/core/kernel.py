@@ -150,14 +150,13 @@ def _think(
     }
 
 
-def _gate(
-    state: StewardState, gate: Agent[None, Verdict], writes: frozenset[str]
-) -> dict[str, Any]:
+def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
-    A step with no write in it is approved without a model call: reads cannot
-    damage the scored database, and paying a critic to say so on every lookup
-    would double the cost of the thing the critic is meant to make affordable.
+    A step of pure lookups is approved without a model call: reads cannot damage
+    the scored database and cannot end the conversation, and paying a critic to
+    say so on every lookup would double the cost of the thing the critic is meant
+    to make affordable.
 
     Refusal is all-or-nothing. The gate judges a plan, not a list, and a plan
     with one forbidden move in it is not half-executable -- letting the harmless
@@ -165,7 +164,7 @@ def _gate(
     chose.
     """
     proposal = [PendingCall(**call) for call in state.calls]
-    if not any(call.name in writes for call in proposal):
+    if not any(call.name in gated for call in proposal):
         return {"approved": state.calls, "calls": []}
 
     try:
@@ -261,11 +260,11 @@ def _traced(name: str, node: Callable[[StewardState], dict[str, Any]]):
 def build_graph(
     assistant: Agent[None, str | DeferredToolRequests],
     gate: Agent[None, Verdict],
-    writes: frozenset[str],
+    gated: frozenset[str],
 ) -> Any:
     graph = StateGraph(StewardState)
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
-    graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, writes=writes)))
+    graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
     graph.add_node("act", _act)
     graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
     graph.add_edge(START, "think")
@@ -278,15 +277,16 @@ def build_graph(
     return graph.compile(checkpointer=InMemorySaver())
 
 
-def _writes(tools: list[ToolDefinition]) -> frozenset[str]:
-    """The tools that change the database, taken from the environment's own labels.
+def _gated(tools: list[ToolDefinition]) -> frozenset[str]:
+    """The tools whose effects cannot be taken back, per the adapter's labels.
 
-    tau2 marks every tool `mutates_state` as a property of the domain, not of the
-    task, so this needs no hand-maintained list and no compiler pass -- and it is
+    Which tools those are is a fact about the environment, so the adapter decides
+    and this only reads the answer -- that is what keeps `core` free of tau2 and
     right in a domain nobody has looked at yet. A tool that arrives unlabelled is
-    treated as a write: the cost of gating a read by mistake is one model call.
+    gated: the cost of reviewing a read by mistake is one model call, and the cost
+    of missing a write is the task.
     """
-    return frozenset(t.name for t in tools if (t.metadata or {}).get("mutates_state", True))
+    return frozenset(t.name for t in tools if (t.metadata or {}).get("gated", True))
 
 
 class Kernel:
@@ -305,7 +305,7 @@ class Kernel:
         self.graph = build_graph(
             build_assistant(tools, policy, model),
             build_gate(policy, gate_model if gate_model is not None else model),
-            _writes(tools),
+            _gated(tools),
         )
 
     def new_thread(self) -> str:

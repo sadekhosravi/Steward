@@ -1,8 +1,8 @@
 """Tool definitions the tests share.
 
-`mutates_state` is stated on both, never defaulted: it is the label the gate
-routes on, so a test that leaves it off is not testing the path it looks like it
-is testing.
+`gated` is stated on both, never defaulted: it is the label the gate routes on,
+so a test that leaves it off is not testing the path it looks like it is testing.
+The adapter sets it from tau2's `mutates_state`, widened to cover the handoff.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ LOOKUP = ToolDefinition(
     name="get_reservation",
     description="Look up a reservation.",
     parameters_json_schema=_RESERVATION_ID,
-    metadata={"mutates_state": False},
+    metadata={"gated": False},
 )
 
 CANCEL = ToolDefinition(
     name="cancel_reservation",
     description="Cancel a reservation.",
     parameters_json_schema=_RESERVATION_ID,
-    metadata={"mutates_state": True},
+    metadata={"gated": True},
 )

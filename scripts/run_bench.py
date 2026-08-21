@@ -24,11 +24,32 @@ from tau2.cli import main  # noqa: E402
 import adapters.tau2  # noqa: E402
 import tracing  # noqa: E402
 
+
+def _flag(name: str) -> str | None:
+    """Read a CLI flag back out of argv, for labelling only.
+
+    tau2 owns the argument parser and we are not going to duplicate it. Nothing
+    depends on the answer -- a label that comes back None costs a tag, not a run.
+    """
+    if name in sys.argv[:-1]:
+        return sys.argv[sys.argv.index(name) + 1]
+    return None
+
+
 if __name__ == "__main__":
     adapters.tau2.register()
     # Here rather than in the Kernel: an entry point may decide to send traces
     # somewhere, a library may not. Off unless the Langfuse keys are in .env.
-    print(f"Langfuse tracing: {'on' if tracing.setup() else 'off'}")
+    on = tracing.setup()
+    if on:
+        # Every session carries these, so a scripted test and a real run are
+        # distinguishable in Langfuse without opening either.
+        tracing.label(
+            domain=_flag("--domain"),
+            model=_flag("--agent-llm"),
+            run=(_flag("--save-to") or "").split("/")[-1].removesuffix(".json") or None,
+        )
+    print(f"Langfuse tracing: {'on' if on else 'off'}")
     try:
         sys.exit(main())
     finally:

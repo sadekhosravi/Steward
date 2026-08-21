@@ -46,6 +46,11 @@ DEFAULT_REASONING_EFFORT = None
 
 _PREFIX = "STEWARD_LLM_"
 
+# Accepted for the model alone, because that is the name most tooling already
+# uses. Named rather than inlined so a caller clearing our configuration -- the
+# test fixture does -- can clear all of it without repeating the string.
+_MODEL_ALIAS = "LLM_MODEL"
+
 
 class LLMConfigError(RuntimeError):
     """Raised when model configuration is missing, malformed, or unknown."""
@@ -85,7 +90,7 @@ def env_defaults(env: Mapping[str, str] | None = None) -> ModelSpec:
     env = os.environ if env is None else env
     return ModelSpec(
         provider=env.get(f"{_PREFIX}PROVIDER", DEFAULT_PROVIDER).strip().lower(),
-        model=(env.get(f"{_PREFIX}MODEL") or env.get("LLM_MODEL") or "").strip(),
+        model=(env.get(f"{_PREFIX}MODEL") or env.get(_MODEL_ALIAS) or "").strip(),
         temperature=_read_number(env, f"{_PREFIX}TEMPERATURE", float, DEFAULT_TEMPERATURE),
         timeout=_read_number(env, f"{_PREFIX}TIMEOUT", float, DEFAULT_TIMEOUT),
         max_tokens=_read_number(env, f"{_PREFIX}MAX_TOKENS", int, None),
