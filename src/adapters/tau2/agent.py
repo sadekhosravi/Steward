@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic_ai.models import Model
 from pydantic_ai.tools import ToolDefinition
 from tau2.agent.base_agent import HalfDuplexAgent, ValidAgentInputMessage
 from tau2.data_model.message import (
@@ -20,6 +21,7 @@ from tau2.data_model.message import (
     ToolMessage,
 )
 from tau2.environment.tool import Tool
+from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
 from core.kernel import Act, Kernel, Step
 
@@ -35,13 +37,19 @@ def _tool_def(tool: Tool) -> ToolDefinition:
     """Describe a tau2 tool without binding its callable.
 
     Calling a `Tool` in-process would mutate the scored database without the call
-    ever appearing in the trajectory, so only the schema crosses over.
+    ever appearing in the trajectory, so only the schema crosses over -- plus the
+    one label the gate needs. `mutates_state` is set by tau2's `is_tool`
+    decorator on the underlying function, which makes "is this a write?" a fact
+    about the domain rather than something we have to guess or maintain a list
+    of. `ToolDefinition.metadata` is not sent to the model, so carrying it there
+    costs nothing in the prompt.
     """
     schema = tool.openai_schema["function"]
     return ToolDefinition(
         name=schema["name"],
         description=schema["description"],
         parameters_json_schema=schema["parameters"],
+        metadata={"mutates_state": getattr(tool._func, MUTATES_STATE_ATTR, True)},
     )
 
 
@@ -76,9 +84,15 @@ def _to_tau2(step: Step) -> AssistantMessage:
 class MASAgent(HalfDuplexAgent[AgentState]):
     """The agent-under-test, as tau2 sees it."""
 
-    def __init__(self, tools: list[Tool], domain_policy: str, model: str | None = None):
+    def __init__(
+        self,
+        tools: list[Tool],
+        domain_policy: str,
+        model: str | Model | None = None,
+        gate_model: str | Model | None = None,
+    ):
         super().__init__(tools=tools, domain_policy=domain_policy)
-        self.kernel = Kernel([_tool_def(t) for t in tools], domain_policy, model)
+        self.kernel = Kernel([_tool_def(t) for t in tools], domain_policy, model, gate_model)
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:
         return AgentState(thread=self.kernel.new_thread())

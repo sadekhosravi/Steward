@@ -5,12 +5,14 @@ plugin discovery, so `register()` must run in the same process as the runner,
 before it starts -- see scripts/run_bench.py.
 """
 
+import os
+
 import llm
 from adapters.tau2.agent import AgentState, MASAgent
 
 AGENT_NAME = "mas"
 
-__all__ = ["AGENT_NAME", "AgentState", "MASAgent", "create_agent", "register"]
+__all__ = ["AGENT_NAME", "GATE_MODEL_ENV", "AgentState", "MASAgent", "create_agent", "register"]
 
 
 # tau2 always sends `--agent-llm-args`, defaulting to {"temperature": 0.0}, so
@@ -18,6 +20,11 @@ __all__ = ["AGENT_NAME", "AgentState", "MASAgent", "create_agent", "register"]
 # them. Anything else is a typo, and a typo that changes nothing is worse than
 # an error at startup.
 _LLM_ARGS = frozenset({"temperature", "timeout", "max_tokens", "reasoning_effort"})
+
+# tau2's CLI has one `--agent-llm`, so a second model for the critic can only
+# come from the environment. Unset means the critic runs on the actor's model,
+# which is the configuration to beat before spending on a stronger one.
+GATE_MODEL_ENV = "MAS_GATE_MODEL"
 
 
 def create_agent(tools, domain_policy, **kwargs):
@@ -29,7 +36,13 @@ def create_agent(tools, domain_policy, **kwargs):
             f"supported keys are {', '.join(sorted(_LLM_ARGS))}"
         )
     model = llm.get_model(kwargs.get("llm") or None, **args)
-    return MASAgent(tools=tools, domain_policy=domain_policy, model=model)
+    gate = os.environ.get(GATE_MODEL_ENV, "").strip()
+    return MASAgent(
+        tools=tools,
+        domain_policy=domain_policy,
+        model=model,
+        gate_model=llm.get_model(gate, **args) if gate else None,
+    )
 
 
 def register(name: str = AGENT_NAME) -> None:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.tools import ToolDefinition
 
 from core.kernel import Kernel
 from core.state import MASState, Obligation, ungrounded, unmet
+from tests.tools import LOOKUP
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
 
@@ -64,31 +64,20 @@ def test_the_ledgers_start_empty():
     assert (state.approved, state.observed, state.obligations) == ([], [], [])
 
 
-CANCEL = ToolDefinition(
-    name="cancel_reservation",
-    description="Cancel a reservation.",
-    parameters_json_schema={
-        "type": "object",
-        "properties": {"reservation_id": {"type": "string"}},
-        "required": ["reservation_id"],
-    },
-)
-
-
 def call_then_report(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     if not [p for m in messages for p in m.parts if isinstance(p, ToolCallPart)]:
-        call = ToolCallPart("cancel_reservation", {"reservation_id": "HKD3PS"}, tool_call_id="c1")
+        call = ToolCallPart("get_reservation", {"reservation_id": "HKD3PS"}, tool_call_id="c1")
         return ModelResponse(parts=[call])
     return ModelResponse(parts=[TextPart("Done.")])
 
 
 def test_user_messages_and_tool_results_both_enter_the_ledger():
     """Provenance is only as good as its intake: both sources have to land."""
-    k = Kernel([CANCEL], policy="Be helpful.", model=FunctionModel(call_then_report))
+    k = Kernel([LOOKUP], policy="Be helpful.", model=FunctionModel(call_then_report))
     thread = k.new_thread()
 
-    paused = k.send(thread, "cancel HKD3PS please")
-    k.resume(thread, {paused.calls[0].id: "cancelled, refund in 5-7 days"})
+    paused = k.send(thread, "check HKD3PS please")
+    k.resume(thread, {paused.calls[0].id: "HKD3PS: economy, 1 bag"})
 
     observed = k.graph.get_state({"configurable": {"thread_id": thread}}).values["observed"]
-    assert observed == ["cancel HKD3PS please", "cancelled, refund in 5-7 days"]
+    assert observed == ["check HKD3PS please", "HKD3PS: economy, 1 bag"]

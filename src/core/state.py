@@ -24,7 +24,19 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["MASState", "Obligation", "ungrounded", "unmet"]
+__all__ = ["MASState", "Obligation", "PendingCall", "ungrounded", "unmet"]
+
+
+class PendingCall(BaseModel):
+    """A tool call the system wants made, in the form the driver has to execute.
+
+    Lives here rather than with the graph because the gate reasons about one
+    before the graph is allowed to emit it.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
 
 
 class Obligation(BaseModel):
@@ -67,7 +79,17 @@ class MASState(BaseModel):
     """Pending calls, as plain `PendingCall` dumps -- see `messages` above."""
 
     approved: list[dict[str, Any]] = Field(default_factory=list)
-    """Calls the gate has passed, verbatim. What gets emitted, always."""
+    """Calls the gate has passed, verbatim. The only thing ever emitted."""
+
+    denied: dict[str, str] = Field(default_factory=dict)
+    """Remediations for calls the gate refused, keyed by call id.
+
+    Kept apart from `tool_results` because a refused call was never executed:
+    nothing came back, so nothing may enter `observed` on its account.
+    """
+
+    revisions: int = 0
+    """Blocked attempts so far this user turn. Bounds the correction loop."""
 
     observed: list[str] = Field(default_factory=list)
     """Every text the system has been shown: user messages and tool results."""
