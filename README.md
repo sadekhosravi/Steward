@@ -118,6 +118,20 @@ uv run python scripts/run_bench.py run --domain mock --agent steward \
 `--agent-llm` takes a plain model id (resolved by `llm`); `--user-llm` takes a
 LiteLLM name, because tau2's user simulator is on a separate provider path.
 
+`scripts/score.py` reads the run file back and puts an error bar on it:
+
+```bash
+uv run python scripts/score.py results/001_baseline.json results/002_gate.json
+```
+
+Each task is run several times under one fixed config, so the spread across a
+task's own trials is the sampling noise -- which means a run's error bar is
+estimable from that run alone, with no repeat and no reliance on `temperature`
+(these models discard it whenever reasoning is enabled). Given more than one run
+it also compares consecutive pairs, paired on the tasks they share, since task
+difficulty is the largest source of variation and pairing cancels it exactly.
+Results and their reading live in [`results/`](results/reports.md).
+
 ## How a turn runs
 
 The Kernel is a LangGraph graph with two nodes. `think` asks a pydantic-ai

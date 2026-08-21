@@ -21,8 +21,17 @@ bulky and reproducible. This file is tracked.
   architecture is supposed to buy.
 - The **user simulator model is part of the experiment**. Changing it
   invalidates comparison with earlier runs, so it is recorded every time.
-- Every run pins agent model, user model, temperature and reasoning effort. A
-  delta is only a result if nothing else moved.
+- Every run pins agent model, user model and reasoning effort. A delta is only a
+  result if nothing else moved.
+- **Runs are not deterministic and are not meant to be.** `temperature` is
+  discarded by these models whenever reasoning is enabled, and nothing would run
+  at 0.0 in production. Pass^k is the metric that covers it: it asks whether the
+  system gets a task right *every* time, which is the property determinism would
+  only have approximated.
+- **Every score carries an error bar, measured from the run itself.** Each task
+  is run four times under one fixed config, so the spread across its own trials
+  is the sampling noise. `scripts/score.py <run.json> [<later-run.json> ...]`
+  computes it, and compares consecutive runs paired on the tasks they share.
 
 ---
 
@@ -59,8 +68,8 @@ resume the graph. `src/adapters/tau2/` is pure translation.
 |---|---|
 | Domain | `airline` (50 tasks) |
 | Agent | `steward` |
-| Agent model | `nvidia:openai/gpt-oss-20b`, temperature 0.0, reasoning effort `low` |
-| User model | `nvidia_nim/openai/gpt-oss-20b`, temperature 0.0 |
+| Agent model | `nvidia:openai/gpt-oss-20b`, reasoning effort `low` |
+| User model | `nvidia_nim/openai/gpt-oss-20b` |
 | Trials | 4 |
 | Max steps | 200 (tau2 default) |
 | Concurrency | 8 |
@@ -69,22 +78,24 @@ resume the graph. `src/adapters/tau2/` is pure translation.
 uv run python scripts/run_bench.py run \
   --domain airline --agent steward \
   --agent-llm openai/gpt-oss-20b \
-  --agent-llm-args '{"temperature":0.0,"reasoning_effort":"low"}' \
+  --agent-llm-args '{"reasoning_effort":"low"}' \
   --user-llm nvidia_nim/openai/gpt-oss-20b \
-  --user-llm-args '{"temperature":0.0}' \
   --num-trials 4 --max-concurrency 8 \
   --save-to results/baseline_airline_gpt-oss-20b.json
 ```
 
 ### Result
 
+The invocation as run also passed `temperature: 0.0` on both paths. It is
+dropped above because it had no effect -- see Run 002's notes.
+
 | Metric | Value |
 |---|---|
-| Average reward | **0.365** |
+| Average reward | **0.365 ± 0.023** |
 | Pass^1 | 0.365 |
 | Pass^2 | 0.260 |
 | Pass^3 | 0.200 |
-| **Pass^4** | **0.160** |
+| **Pass^4** | **0.160 ± 0.029** |
 | Tasks solved on all 4 trials | 8 / 50 |
 | Tasks never solved | 23 / 50 |
 
@@ -179,9 +190,9 @@ same model as the actor (`STEWARD_GATE_MODEL` unset).
 | | |
 |---|---|
 | Domain | `airline` (50 tasks) |
-| Agent model | `nvidia:openai/gpt-oss-20b`, temperature 0.0 (**ignored**, see Notes), reasoning effort `low` |
+| Agent model | `nvidia:openai/gpt-oss-20b`, reasoning effort `low` |
 | Gate model | same as agent |
-| User model | `nvidia_nim/openai/gpt-oss-20b`, temperature 0.0 |
+| User model | `nvidia_nim/openai/gpt-oss-20b` |
 | Trials | 4 |
 | Concurrency | 8 |
 
@@ -189,11 +200,11 @@ same model as the actor (`STEWARD_GATE_MODEL` unset).
 
 | Metric | Run 001 | Run 002 | Δ |
 |---|---|---|---|
-| Average reward | 0.365 | **0.420** | +0.055 |
+| Average reward | 0.365 ± 0.023 | **0.420 ± 0.021** | **+0.055 ± 0.033** |
 | Pass^1 | 0.360 | 0.340 | −0.020 |
 | Pass^2 | 0.260 | 0.280 | +0.020 |
 | Pass^3 | 0.200 | 0.260 | +0.060 |
-| **Pass^4** | **0.160** | **0.220** | **+0.060** |
+| **Pass^4** | **0.160 ± 0.029** | **0.220 ± 0.031** | **+0.060** |
 | Solved on all 4 trials | 8 / 50 | 11 / 50 | +3 |
 | Never solved | 23 / 50 | 22 / 50 | −1 |
 
@@ -229,12 +240,17 @@ of proposed writes wrong, abstention is worth more than attempts: the three
 correct writes lost were bought back many times over by the incorrect ones
 never made. Net +15 simulations passing DB.
 
-**Pass^4 rose 0.160 → 0.220, +37% relative, with COMMUNICATE flat.**
-Consistency was the gap Run 001 identified, the gate was the intervention aimed
-at it, and it moved without damaging the conversation — the failure mode a
-badly-tuned critic would have produced. Pass^1 fell 0.02 while Pass^3 and
-Pass^4 rose 0.06: the gate trades a little peak capability for materially more
-reliability, which is the trade the project exists to make.
+**Pass^4 rose 0.160 → 0.220, with COMMUNICATE flat.** Consistency was the gap
+Run 001 identified, the gate was the intervention aimed at it, and it moved
+without damaging the conversation — the failure mode a badly-tuned critic would
+have produced. Pass^1 fell 0.02 while Pass^3 and Pass^4 rose 0.06, which reads
+as the gate trading a little peak capability for more reliability.
+
+That reading is a hypothesis, not a finding. The Pass^4 move is smaller than
+Pass^4's own error bar (see Notes), and the shape of it — Pass^1 down, Pass^3 and
+Pass^4 up — is exactly what noise looks like when four numbers are read off one
+run. The stronger evidence is the aggregate: +0.055 ± 0.033 on average reward
+with 14 tasks improving against 5 regressing.
 
 **The ceiling is now visible.** Blocking is a blunt instrument — it converts a
 wrong write into no write, which scores only when the task did not require that
@@ -251,10 +267,39 @@ minutes and then *succeeds*; task 35 burns the same time and fails.
 
 **`temperature: 0.0` is silently discarded on this model.** pydantic-ai emits
 `UserWarning: Sampling parameters ['temperature'] are not supported when
-reasoning is enabled`. Both runs sampled at the provider default. **No result in
-this file is a controlled comparison in the strict sense**, and we have no
-variance estimate to say how much of the +0.055 is real. Establishing that noise
-floor is now a prerequisite for trusting any future delta.
+reasoning is enabled`; both runs sampled at the provider default, and the user
+simulator runs the same model. Temperature has been removed from the configs
+rather than chased: it is not settable here, production would not use it, and
+pass^k already measures what it was standing in for.
+
+**The noise floor, which is what temperature was really a proxy for, is now
+measured** -- and it needed no repeat run. Each task was run four times under one
+fixed config, so the spread across its own trials is the sampling noise.
+Splitting either run into two disjoint 2-trial halves puts the same config
+0.01-0.08 apart on average reward. `scripts/score.py` computes the error bars
+above from the run files directly.
+
+Which puts this run's headline in its place:
+
+| | |
+|---|---|
+| Paired delta, average reward | +0.055 ± 0.033, **1.7 SE**, p ≈ 0.10 |
+| Tasks better / worse / unchanged | 14 / 5 / 31 |
+| Smallest difference detectable at 50×4 | 0.092 |
+
+Two independent statistics agree at about 1.7 SE -- the aggregate and the count
+of tasks that moved -- so the gate's improvement is probably real, but it is not
+demonstrated. **The +0.060 on Pass^4 is inside noise entirely**: at 50 tasks
+Pass^4 cannot resolve anything under about 0.12, because it reduces four trials
+to a single yes/no. Pass^4 stays the headline, since consistency is what the
+project is about, but average reward paired by task is what a change should be
+judged on.
+
+This is a constraint on everything that follows, not just on this run. A future
+node that buys a genuine +0.04 will not be distinguishable from nothing at this
+sample size. Four times the simulations would halve the bar, at roughly a day of
+wall clock per run; adding a second domain buys the same precision and wider
+coverage for the same spend.
 
 **GATE can crash a simulation.** One `infrastructure_error` (task 32 trial 0):
 `UnexpectedModelBehavior: Exceeded maximum output retries (1)`, raised inside
