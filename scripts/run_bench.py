@@ -22,7 +22,15 @@ if "NVIDIA_API_KEY" in os.environ:
 from tau2.cli import main  # noqa: E402
 
 import adapters.tau2  # noqa: E402
+import tracing  # noqa: E402
 
 if __name__ == "__main__":
     adapters.tau2.register()
-    sys.exit(main())
+    # Here rather than in the Kernel: an entry point may decide to send traces
+    # somewhere, a library may not. Off unless the Langfuse keys are in .env.
+    print(f"Langfuse tracing: {'on' if tracing.setup() else 'off'}")
+    try:
+        sys.exit(main())
+    finally:
+        # The exporter batches, and a run that exits promptly can outrun it.
+        tracing.shutdown()

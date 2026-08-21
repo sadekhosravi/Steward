@@ -27,6 +27,7 @@ is emitted that the gate never saw.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal
@@ -47,6 +48,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.tools import ToolDefinition
 from pydantic_core import to_jsonable_python
 
+import tracing
 from agents.assistant import build_assistant
 from agents.gate import UNAVAILABLE, Approved, Verdict, build_gate, review
 from core.state import PendingCall, StewardState
@@ -237,16 +239,35 @@ def _route_gate(state: StewardState) -> Literal["act", "think", "escalate"]:
     return "think" if state.revisions <= REVISION_LIMIT else "escalate"
 
 
+def _traced(name: str, node: Callable[[StewardState], dict[str, Any]]):
+    """Report what a node was given and what it decided.
+
+    This is the layer that makes a model call legible: pydantic-ai records the
+    call, the span around it records which agent made it and what the Kernel did
+    with the answer. `act` is not wrapped, because it leaves by raising
+    LangGraph's interrupt -- a span would file that as a failure, and what it
+    yields is already the output of the `gate` span before it.
+    """
+
+    def traced(state: StewardState) -> dict[str, Any]:
+        with tracing.span(name, **state.model_dump(exclude=tracing.BULK)) as span:
+            delta = node(state)
+            span.update(output=tracing.visible(delta))
+            return delta
+
+    return traced
+
+
 def build_graph(
     assistant: Agent[None, str | DeferredToolRequests],
     gate: Agent[None, Verdict],
     writes: frozenset[str],
 ) -> Any:
     graph = StateGraph(StewardState)
-    graph.add_node("think", partial(_think, assistant=assistant))
-    graph.add_node("gate", partial(_gate, gate=gate, writes=writes))
+    graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
+    graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, writes=writes)))
     graph.add_node("act", _act)
-    graph.add_node("escalate", partial(_escalate, assistant=assistant))
+    graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
     graph.add_edge(START, "think")
     graph.add_conditional_edges("think", _route_think, {"gate": "gate", END: END})
     graph.add_conditional_edges(
@@ -293,19 +314,30 @@ class Kernel:
 
     def send(self, thread: str, text: str) -> Step:
         """Deliver a user message and run until the Kernel needs something."""
-        return self._run(thread, {"prompt": text, "revisions": 0})
+        return self._run(thread, {"prompt": text, "revisions": 0}, "message", text=text)
 
     def resume(self, thread: str, results: dict[str, str]) -> Step:
         """Hand back the results of the calls from the last `Act` and carry on."""
-        return self._run(thread, Command(resume=results))
+        return self._run(thread, Command(resume=results), "results", results=results)
 
-    def _run(self, thread: str, payload: Any) -> Step:
+    def _run(self, thread: str, payload: Any, name: str, **traced: Any) -> Step:
+        """One trace per step, named for what arrived, all of them in one session.
+
+        A step is the largest unit the Kernel controls end to end: emitting tool
+        calls hands control back to the harness, so a span held across that would
+        have to survive a return. The conversation is the session instead, which
+        is how the pieces read as one story.
+        """
         config = {
             "configurable": {"thread_id": thread},
             "recursion_limit": RECURSION_LIMIT,
         }
-        out = self.graph.invoke(payload, config)
-        paused = out.get("__interrupt__")
-        if paused:
-            return Act(calls=[PendingCall(**call) for call in paused[0].value])
-        return Say(text=out["reply"])
+        with tracing.session(thread), tracing.span(name, **traced) as span:
+            out = self.graph.invoke(payload, config)
+            paused = out.get("__interrupt__")
+            if paused:
+                step: Step = Act(calls=[PendingCall(**call) for call in paused[0].value])
+            else:
+                step = Say(text=out["reply"])
+            span.update(output=step)
+            return step

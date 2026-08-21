@@ -86,7 +86,7 @@ src/
   patterns/        multi-agent topologies, swappable for comparison
   tools/           private tools, invisible to the benchmark
   llm/             provider access, prompt assembly, cost accounting
-  trace/           internal tracing (the harness only records the outer trajectory)
+  tracing/         internal tracing (the harness only records the outer trajectory)
   adapters/tau2/   HalfDuplexAgent subclass, factory, type translation
 scripts/           bootstrap and evaluation entry points
 configs/           run and topology configuration
@@ -133,6 +133,42 @@ which is what will let a tool call originate deep inside a sub-agent later.
 The Kernel itself never calls a model. Reward is binary per task and pass^k
 only counts a task when every trial passes, so variance in control flow is a
 direct score loss.
+
+## Tracing
+
+The benchmark records only the outer trajectory, so everything that makes this a
+multi-agent system is invisible in its output. Langfuse fills that in. Put the
+keys in `.env` and it turns itself on:
+
+```
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+```
+
+`scripts/run_bench.py` prints `Langfuse tracing: on` at startup when it worked.
+Leave the keys out, or set `LANGFUSE_TRACING_ENABLED=false`, and nothing is sent.
+
+Two layers, and they nest:
+
+| Layer | Comes from | Records |
+|---|---|---|
+| model calls | pydantic-ai's OpenTelemetry instrumentation | prompt, response, tool calls, tokens |
+| graph nodes | `tracing.span()`, wrapped around each node in `core.kernel` | what the node was given, what it decided |
+
+The second is what makes the first legible: a generation on its own does not say
+which agent made it or what the Kernel did with the answer. It also puts the
+gate's verdict on the record — Run 002 could only estimate the block rate from
+how many writes came out the other end.
+
+One trace per Kernel step, named for what arrived (`message` or `results`), and
+the conversation as the session, so a whole simulation reads top to bottom in
+Langfuse's session view. A step is the largest unit the Kernel controls end to
+end: emitting tool calls hands control back to tau2, so a span cannot be held
+across it.
+
+The message history is deliberately left off the node spans. It is already on
+the generation spans in full, and it grows with the conversation.
 
 ## Updating tau2
 
