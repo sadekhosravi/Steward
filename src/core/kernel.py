@@ -28,7 +28,7 @@ from uuid import uuid4
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.models import Model
@@ -36,6 +36,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_core import to_jsonable_python
 
 from agents.assistant import build_assistant
+from core.state import MASState
 
 # One user turn can cost many tool round trips. LangGraph's default of 25 would
 # cut a long-but-legitimate investigation short and score it as a failure.
@@ -67,32 +68,13 @@ class Act:
 Step = Say | Act
 
 
-class MASState(BaseModel):
-    """The graph schema, and the only place conversation state lives.
-
-    Kept JSON-native because the checkpointer serializes it: pydantic-ai's
-    message objects are stored dumped and rehydrated in the node that uses them,
-    so the state stays portable if the checkpointer ever moves off memory.
-    """
-
-    prompt: str | None = None
-    """A new user message, consumed by the next `think`."""
-
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    """Dumped pydantic-ai history. Overwritten, not appended: a run returns the
-    whole history, so a reducer would duplicate it."""
-
-    tool_results: dict[str, str] = Field(default_factory=dict)
-    """Results for the calls we last yielded, keyed by call id."""
-
-    reply: str = ""
-
-    calls: list[dict[str, Any]] = Field(default_factory=list)
-    """Pending calls, as plain `PendingCall` dumps -- see `messages` above."""
-
-
 def _think(state: MASState, assistant: Agent[None, str | DeferredToolRequests]) -> dict[str, Any]:
-    """Ask the assistant what to do next, given everything that has happened."""
+    """Ask the assistant what to do next, given everything that has happened.
+
+    Also the one place new evidence enters, because it is the one node that sees
+    both a user message and tool results before they are consumed.
+    """
+    seen = [t for t in [state.prompt, *state.tool_results.values()] if t]
     results = DeferredToolResults(calls=dict(state.tool_results)) if state.tool_results else None
     run = assistant.run_sync(
         state.prompt,
@@ -112,6 +94,7 @@ def _think(state: MASState, assistant: Agent[None, str | DeferredToolRequests]) 
     )
     return {
         "messages": to_jsonable_python(run.all_messages()),
+        "observed": state.observed + seen,
         "prompt": None,
         "tool_results": {},
         "calls": calls,
