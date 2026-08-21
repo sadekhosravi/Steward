@@ -5,10 +5,14 @@ agent can run on a fast small model and another on a slower, stronger one. The
 `MAS_LLM_*` variables only supply the fallback used when an argument is omitted::
 
     MAS_LLM_PROVIDER=nvidia
-    MAS_LLM_MODEL=openai/gpt-oss-20b
+    MAS_LLM_MODEL=openai/gpt-oss-120b
     MAS_LLM_TEMPERATURE=0.0
     MAS_LLM_TIMEOUT=120
     MAS_LLM_MAX_TOKENS=
+    MAS_LLM_REASONING_EFFORT=low
+
+`LLM_MODEL` is accepted as an alias for `MAS_LLM_MODEL`, since that is the name
+a provider's own docs use.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from dataclasses import dataclass
 
 __all__ = [
     "DEFAULT_PROVIDER",
+    "DEFAULT_REASONING_EFFORT",
     "DEFAULT_TEMPERATURE",
     "DEFAULT_TIMEOUT",
     "LLMConfigError",
@@ -33,6 +38,11 @@ DEFAULT_TEMPERATURE = 0.0
 # Bounded wait. Some free-tier endpoints stall indefinitely; failing one call
 # beats hanging a simulation and, with it, a whole benchmark sweep.
 DEFAULT_TIMEOUT = 120.0
+# Reasoning models bill thinking tokens against latency, and the open-weight
+# ones do it lavishly: gpt-oss-120b answers "reply OK" in 3s at `low` and times
+# out past 300s at `medium`. Left unset here because the right value is a
+# property of the model, not of the system -- see .env.
+DEFAULT_REASONING_EFFORT = None
 
 _PREFIX = "MAS_LLM_"
 
@@ -50,6 +60,7 @@ class ModelSpec:
     temperature: float | None = DEFAULT_TEMPERATURE
     timeout: float | None = DEFAULT_TIMEOUT
     max_tokens: int | None = None
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT
 
     def __str__(self) -> str:
         return f"{self.provider}:{self.model}"
@@ -74,8 +85,11 @@ def env_defaults(env: Mapping[str, str] | None = None) -> ModelSpec:
     env = os.environ if env is None else env
     return ModelSpec(
         provider=env.get(f"{_PREFIX}PROVIDER", DEFAULT_PROVIDER).strip().lower(),
-        model=env.get(f"{_PREFIX}MODEL", "").strip(),
+        model=(env.get(f"{_PREFIX}MODEL") or env.get("LLM_MODEL") or "").strip(),
         temperature=_read_number(env, f"{_PREFIX}TEMPERATURE", float, DEFAULT_TEMPERATURE),
         timeout=_read_number(env, f"{_PREFIX}TIMEOUT", float, DEFAULT_TIMEOUT),
         max_tokens=_read_number(env, f"{_PREFIX}MAX_TOKENS", int, None),
+        reasoning_effort=(
+            env.get(f"{_PREFIX}REASONING_EFFORT", "").strip().lower() or DEFAULT_REASONING_EFFORT
+        ),
     )

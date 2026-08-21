@@ -5,6 +5,7 @@ plugin discovery, so `register()` must run in the same process as the runner,
 before it starts -- see scripts/run_bench.py.
 """
 
+import llm
 from adapters.tau2.agent import AgentState, MASAgent
 
 AGENT_NAME = "mas"
@@ -12,9 +13,23 @@ AGENT_NAME = "mas"
 __all__ = ["AGENT_NAME", "AgentState", "MASAgent", "create_agent", "register"]
 
 
+# tau2 always sends `--agent-llm-args`, defaulting to {"temperature": 0.0}, so
+# the settings it knows about have to be named here or the run silently ignores
+# them. Anything else is a typo, and a typo that changes nothing is worse than
+# an error at startup.
+_LLM_ARGS = frozenset({"temperature", "timeout", "max_tokens", "reasoning_effort"})
+
+
 def create_agent(tools, domain_policy, **kwargs):
-    """tau2 agent factory. `--agent-llm` picks the model, resolved by `llm`."""
-    return MASAgent(tools=tools, domain_policy=domain_policy, model=kwargs.get("llm"))
+    """tau2 agent factory. `--agent-llm` and `--agent-llm-args` pick the model."""
+    args = dict(kwargs.get("llm_args") or {})
+    if unknown := sorted(set(args) - _LLM_ARGS):
+        raise llm.LLMConfigError(
+            f"--agent-llm-args does not support {', '.join(unknown)}; "
+            f"supported keys are {', '.join(sorted(_LLM_ARGS))}"
+        )
+    model = llm.get_model(kwargs.get("llm") or None, **args)
+    return MASAgent(tools=tools, domain_policy=domain_policy, model=model)
 
 
 def register(name: str = AGENT_NAME) -> None:

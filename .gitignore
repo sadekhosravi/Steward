@@ -99,3 +99,9 @@ CLAUDE.md
 # tau2 benchmark data, fetched by scripts/bootstrap_data.py. Large (~140M) and
 # pinned to the tau2 rev in pyproject.toml, so it is reproducible, not tracked.
 vendor/
+
+# ---- Benchmark results ----
+# Raw tau2 simulation output is bulky and reproducible; the written-up report
+# is not, so it is tracked.
+results/*
+!results/reports.md

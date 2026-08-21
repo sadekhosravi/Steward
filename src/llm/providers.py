@@ -15,10 +15,9 @@ import threading
 from dataclasses import dataclass
 
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
-from pydantic_ai.settings import ModelSettings
 
 from llm.config import LLMConfigError, ModelSpec
 
@@ -95,15 +94,21 @@ def litellm_name(spec: ModelSpec) -> str:
     return f"{get_provider(spec.provider).litellm_prefix}/{spec.model}"
 
 
-def model_settings(spec: ModelSpec) -> ModelSettings:
-    """The per-request settings in `spec`, omitting anything left as `None`."""
-    settings = ModelSettings()
+def model_settings(spec: ModelSpec) -> OpenAIChatModelSettings:
+    """The per-request settings in `spec`, omitting anything left as `None`.
+
+    Both providers speak the OpenAI protocol, so reasoning effort travels under
+    its `openai_` name even on NVIDIA Build.
+    """
+    settings = OpenAIChatModelSettings()
     if spec.temperature is not None:
         settings["temperature"] = spec.temperature
     if spec.timeout is not None:
         settings["timeout"] = spec.timeout
     if spec.max_tokens is not None:
         settings["max_tokens"] = spec.max_tokens
+    if spec.reasoning_effort is not None:
+        settings["openai_reasoning_effort"] = spec.reasoning_effort
     return settings
 
 
@@ -111,7 +116,7 @@ def _construct(spec: ModelSpec) -> Model:
     info = get_provider(spec.provider)
     if not spec.model:
         raise LLMConfigError(
-            "no model given; pass model=... or set MAS_LLM_MODEL in .env. "
+            "no model given; pass model=... or set MAS_LLM_MODEL (or LLM_MODEL) in .env. "
             f"Available {info.name} models: {info.catalog_url}"
         )
     key = api_key_for(spec.provider)

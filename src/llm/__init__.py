@@ -20,6 +20,7 @@ that field set to `None` and pass it to `build_model`.
 
 from llm.config import (
     DEFAULT_PROVIDER,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT,
     LLMConfigError,
@@ -38,6 +39,7 @@ from llm.providers import (
 
 __all__ = [
     "DEFAULT_PROVIDER",
+    "DEFAULT_REASONING_EFFORT",
     "DEFAULT_TEMPERATURE",
     "DEFAULT_TIMEOUT",
     "PROVIDERS",
@@ -62,6 +64,7 @@ def resolve(
     temperature: float | None = None,
     timeout: float | None = None,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> ModelSpec:
     """Fill in whatever was not passed from the `MAS_LLM_*` environment defaults."""
     defaults = env_defaults()
@@ -71,6 +74,9 @@ def resolve(
         temperature=defaults.temperature if temperature is None else temperature,
         timeout=defaults.timeout if timeout is None else timeout,
         max_tokens=defaults.max_tokens if max_tokens is None else max_tokens,
+        reasoning_effort=(
+            defaults.reasoning_effort if reasoning_effort is None else reasoning_effort
+        ),
     )
 
 
@@ -81,6 +87,7 @@ def get_model(
     temperature: float | None = None,
     timeout: float | None = None,
     max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ):
     """A pydantic-ai model, with temperature/timeout/max_tokens already applied."""
     return build_model(
@@ -90,5 +97,6 @@ def get_model(
             temperature=temperature,
             timeout=timeout,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
     )
