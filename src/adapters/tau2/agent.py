@@ -23,6 +23,7 @@ from tau2.data_model.message import (
 from tau2.environment.tool import Tool
 from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
+from adapters.tau2.descriptions import describe
 from adapters.tau2.schemas import tighten
 from core.kernel import Act, Kernel, Step
 
@@ -60,13 +61,14 @@ def _tool_def(tool: Tool) -> ToolDefinition:
     The parameter schema is tightened on the way through, because tau2 declares a
     looser one than it enforces -- see `schemas`. The model is shown the tightened
     version and held to it, which is the whole point: a schema nobody checks is a
-    suggestion.
+    suggestion. The description is widened for the opposite reason -- see
+    `descriptions` -- because tau2's says less than the model needs.
     """
     schema = tool.openai_schema["function"]
     mutates = getattr(tool._func, MUTATES_STATE_ATTR, True)
     return ToolDefinition(
         name=schema["name"],
-        description=schema["description"],
+        description=describe(tool),
         parameters_json_schema=tighten(schema["parameters"]),
         metadata={"gated": mutates or schema["name"] in HANDOFF},
     )

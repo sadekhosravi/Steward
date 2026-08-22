@@ -8,6 +8,7 @@ touches no database at all -- so the widening happens here and is pinned here.
 
 from __future__ import annotations
 
+from pydantic import BaseModel
 from tau2.environment.tool import Tool
 from tau2.environment.toolkit import is_tool
 
@@ -77,3 +78,71 @@ def test_every_handoff_name_is_one_tau2_actually_uses():
     from tau2.domains.airline.tools import AirlineTools
 
     assert HANDOFF <= {name for name in dir(AirlineTools) if not name.startswith("_")}
+
+
+class Record(BaseModel):
+    """A return type with fields worth naming."""
+
+    record_id: str
+    balance: int
+
+
+@is_tool("read")
+def get_record(record_id: str) -> Record:
+    """Look up a record.
+
+    Args:
+        record_id: The record to look up.
+    """
+    raise NotImplementedError
+
+
+@is_tool("read")
+def search_records(query: str) -> list[Record]:
+    """Search records.
+
+    Args:
+        query: What to search for.
+    """
+    raise NotImplementedError
+
+
+def description(func) -> str:
+    return _tool_def(Tool(func)).description
+
+
+def test_the_model_is_told_what_comes_back():
+    """The regression this exists for.
+
+    tau2's own line for `get_user_details` mentions reservations and stops there,
+    so an agent asked for a gift card balance concluded no tool could give it one
+    and said so -- with the balances sitting in the record that tool returns. A
+    field it cannot see until after the call is a field it will not call for.
+    """
+    assert description(get_record) == (
+        "Look up a record.\nReturns an object with: record_id, balance."
+    )
+
+
+def test_a_list_return_says_so():
+    assert description(search_records).endswith(
+        "Returns a list, each entry with: record_id, balance."
+    )
+
+
+def test_a_tool_with_nothing_to_say_says_nothing():
+    """A `str` return has no fields, and an empty `Returns:` is worse than none."""
+    assert description(get_reservation) == "Look up a reservation."
+
+
+def test_tau2_no_longer_tells_the_model_to_transfer_when_it_is_stuck():
+    """tau2's text licenses the bail-out the gate exists to prevent.
+
+    A tool description argues with the system prompt from closer range: it sits
+    beside the tool the model is reaching for. Ours has to state the same rule.
+    """
+    from tau2.domains.airline.tools import AirlineTools
+
+    assert "cannot solve" in (AirlineTools.transfer_to_human_agents.__doc__ or "")
+    assert "cannot solve" not in description(transfer_to_human_agents)
+    assert "last resort" in description(transfer_to_human_agents)
