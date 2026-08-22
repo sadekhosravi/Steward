@@ -18,6 +18,14 @@ is four flat fields, three of them lists of plain strings, deliberately: the
 gate's own notes record a 20B model answering a two-member union in prose often
 enough to need three output retries, and nested models fail the same way.
 
+It also decides which parts of the policy the actor gets to see. That is not a
+second job bolted on: choosing the route and choosing the rules the route runs
+under is one act, and this node is already the only one that reads the whole
+policy once per turn rather than once per tool call. `core.policy` has the
+reasoning. What matters here is that the field is a list of headings copied from
+a list, not a judgment -- and that naming too few is the way it hurts, so the
+instructions push the same direction they push on `lookups`.
+
 The one thing this node must not do is write down an identifier. It plans before
 the lookups have run, so it holds none, and any it produced would be invented and
 copied forward by the actor into exactly the tool call the provenance ledger
@@ -38,6 +46,7 @@ import llm
 # rendering shared beats two that drift apart. It lives in `gate` because that is
 # where it was first needed, not because it belongs to the gate.
 from agents.gate import transcript
+from core.policy import contents
 
 __all__ = ["OUTPUT_RETRIES", "Plan", "brief", "build_planner", "catalogue", "render"]
 
@@ -73,6 +82,15 @@ class Plan(BaseModel):
         description=(
             "Every write the request needs, in the order they must happen, one line "
             "each, naming the tool. Empty when the request needs none."
+        ),
+    )
+    policy_sections: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which sections of the policy this turn is governed by, copied exactly "
+            "from the list of section names in your instructions. Name every area "
+            "the request touches, not just the main one. Leave empty only if you "
+            "cannot tell."
         ),
     )
 
@@ -133,6 +151,26 @@ a failure. Say so in `goal`, list the lookups that establish it, and leave
 own to give, and a handoff ends the conversation with everything else still
 undone.
 
+WHICH RULES APPLY
+
+`policy_sections` is the other half of your job. The assistant is not shown the
+whole policy -- it is shown the rules that hold on every turn, plus the sections
+you name here. A section you leave out is one it will be working without, so name
+every area the request touches: a cancellation that ends in money going back
+needs the cancelling rules and the refund rules both, and a customer who asks
+what a change would cost is asking about modifying whether or not they go through
+with it. Reading a section that turned out not to matter costs nothing.
+
+Copy the names exactly as they appear here:
+
+<sections>
+{contents}
+</sections>
+
+If you genuinely cannot tell, leave it empty and the assistant is shown all of
+them -- which is safe, and worse than choosing, so do not use it to avoid the
+question.
+
 Keep every line short enough to act on. You will be asked again as the
 conversation goes on, so plan from what is true now, not from what you are hoping
 for.
@@ -179,10 +217,16 @@ def build_planner(
     Declaring them would let it emit a call, and a call from here would reach the
     environment before anything had reviewed it. It needs to know what exists, not
     to be able to reach it.
+
+    It is given the policy whole, and unlike the actor it keeps it: this runs once
+    per user turn, so the saving would be one copy against the actor's twenty, and
+    a router that cannot see what it is choosing between is not a router.
     """
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
-        instructions=INSTRUCTIONS.format(tools=catalogue(tools), policy=policy),
+        instructions=INSTRUCTIONS.format(
+            tools=catalogue(tools), policy=policy, contents=contents(policy)
+        ),
         output_type=Plan,
         retries={"output": OUTPUT_RETRIES},
     )

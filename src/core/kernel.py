@@ -24,6 +24,10 @@ of its cost control: a turn of twenty tool calls re-enters `think` twenty times
 and `plan` never, because `resume()` returns into `act` and rejoins below it. One
 planning call per user message, whatever the turn goes on to cost.
 
+That asymmetry is also why `plan` is where the policy is routed. It reads the
+whole policy once and hands the actor the sections this turn is about; the actor
+carries those through twenty rebuilds of its instructions instead of the lot.
+
     kernel = Kernel(tools, policy)
     thread = kernel.new_thread()
     step = kernel.send(thread, "please cancel my flight")
@@ -57,6 +61,7 @@ import tracing
 from agents.assistant import Assistant, build_assistant
 from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
+from core.policy import excerpt
 from core.state import Deps, PendingCall, StewardState
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
@@ -119,19 +124,24 @@ def _history(state: StewardState) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(state.messages)
 
 
-def _plan(state: StewardState, planner: Agent[None, Plan]) -> dict[str, Any]:
-    """Write down the route before the actor starts composing calls.
+def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[str, Any]:
+    """Write down the route before the actor starts composing calls, and the rules it runs under.
 
     Fails *open*, which is the opposite of the gate beside it and for the same
     reason. A verdict that never arrived authorises nothing, so a missing one has
     to refuse; a plan that never arrived withholds nothing, so a missing one costs
     only the advice. The actor has solved tasks without it for three runs.
+
+    The policy excerpt fails open in the stronger sense, because it *can* withhold:
+    no plan means no sections named, and `excerpt` answers that with all of them.
+    A turn the planner could not answer for is therefore exactly the prompt this
+    node existed to build before any of it was selective.
     """
     try:
         plan = planner.run_sync(brief(_history(state), state.prompt)).output
     except UnexpectedModelBehavior:
-        return {"plan": ""}
-    return {"plan": render(plan)}
+        return {"plan": "", "policy": excerpt(policy, [])}
+    return {"plan": render(plan), "policy": excerpt(policy, plan.policy_sections)}
 
 
 def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
@@ -150,7 +160,7 @@ def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
         # likely source of an identifier the actor is about to use, and it does not
         # reach `observed` until this node returns -- so passing the stored ledger
         # alone would reject a reservation id the customer gave a moment ago.
-        deps=Deps(observed=state.observed + seen, plan=state.plan),
+        deps=Deps(observed=state.observed + seen, plan=state.plan, policy=state.policy),
     )
     output = run.output
     calls = (
@@ -286,9 +296,10 @@ def build_graph(
     gate: Agent[None, Verdict],
     planner: Agent[None, Plan],
     gated: frozenset[str],
+    policy: str,
 ) -> Any:
     graph = StateGraph(StewardState)
-    graph.add_node("plan", _traced("plan", partial(_plan, planner=planner)))
+    graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
     graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
     graph.add_node("act", _act)
@@ -336,6 +347,7 @@ class Kernel:
             build_gate(policy, gate_model if gate_model is not None else model),
             build_planner(tools, policy, planner_model if planner_model is not None else model),
             _gated(tools),
+            policy,
         )
 
     def new_thread(self) -> str:

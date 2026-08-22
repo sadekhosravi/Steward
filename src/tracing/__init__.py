@@ -60,7 +60,7 @@ _labels: dict[str, str] = {}
 # pydantic-ai message history is already on the generation spans in full, and
 # both of these grow with the conversation, so including them would send the same
 # text again for every node of every step of every one of 200 simulations.
-BULK = frozenset({"messages", "observed"})
+BULK = frozenset({"messages", "observed", "policy"})
 
 
 def setup(client: Langfuse | None = None) -> bool:

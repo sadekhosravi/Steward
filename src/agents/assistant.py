@@ -17,6 +17,13 @@ message would be indistinguishable from something the customer said -- `transcri
 renders every `UserPromptPart` as "Customer:" -- and the gate would then be
 judging the actor against words it put in the customer's mouth.
 
+The policy arrives in two pieces. What holds on every turn -- the preamble, and
+the section defining what a reservation and a cabin class are -- is built into
+the instructions. The procedure sections are not: the planner names the ones the
+turn is about and only those are shown, as a third instructions block. `core.policy`
+says why, and the short version is that the actor rebuilds its instructions on
+every request of a turn while the planner pays once.
+
 The instructions below are not general advice. Every section of them answers a
 failure counted in the 50-task diagnostic run: invented identifiers (41% of all
 environment errors), arithmetic done in the model's head (31%, with the
@@ -34,9 +41,10 @@ from pydantic_ai.tools import ToolDefinition
 
 import llm
 from agents.toolset import declared
+from core.policy import contents, standing
 from core.state import Deps
 
-__all__ = ["Assistant", "build_assistant", "plan_for_this_turn"]
+__all__ = ["Assistant", "build_assistant", "plan_for_this_turn", "rules_for_this_turn"]
 
 Assistant = Agent[Deps, "str | DeferredToolRequests"]
 """The actor. Deps are the provenance ledger and this turn's plan."""
@@ -128,8 +136,25 @@ because the request is awkward, not because the answer is no -- a refusal is
 yours to give -- and not because you are unsure. Unsure means look it up or ask.
 
 <policy>
-{policy}
+{standing}
 </policy>
+
+The policy has a further section for each thing you can do:
+
+{contents}
+
+The ones this turn is about are reproduced below, under RULES FOR THIS TURN. The
+others still hold: everything you propose to change is reviewed against the whole
+policy before it runs, so a rule you were not shown can still stop you. If what
+the customer wants turns out to belong to a section you have not been given, say
+what you can establish and ask them for what you need -- do not guess at the rule
+and do not transfer.
+""".strip()
+
+
+RULES = """
+RULES FOR THIS TURN
+{sections}
 """.strip()
 
 
@@ -143,6 +168,21 @@ def plan_for_this_turn(ctx: RunContext[Deps]) -> str:
     return ctx.deps.plan if ctx.deps else ""
 
 
+def rules_for_this_turn(ctx: RunContext[Deps]) -> str:
+    """The policy sections the planner routed this turn to.
+
+    Dynamic for the same reason the plan is: it differs per run, and pydantic-ai
+    re-evaluates the callable on every request, so the rules stay in front of the
+    actor across a whole turn of tool calls rather than only the first.
+
+    Returns nothing when the turn was routed nowhere. That is the escalation run,
+    which has had its tools taken away and exists only to end the turn by talking
+    to the customer -- a procedure for making a change is the one thing it must
+    not be handed.
+    """
+    return RULES.format(sections=ctx.deps.policy) if ctx.deps and ctx.deps.policy else ""
+
+
 def build_assistant(
     tools: list[ToolDefinition], policy: str, model: str | Model | None = None
 ) -> Assistant:
@@ -151,14 +191,23 @@ def build_assistant(
     `model` is a model id, or a ready-made model when the caller has one -- which
     is how tests hand it a scripted stand-in instead of a live endpoint.
 
-    Instructions are a sequence: the standing ones, then the plan, which is a
-    function because it differs per run. pydantic-ai re-evaluates the callable on
-    every request of a run, so the plan stays in front of the actor across a whole
-    turn of tool calls rather than only on the first one.
+    `policy` is the whole domain policy. What is built in here is the part that
+    holds whatever the turn is about, plus the list of section names; the sections
+    themselves arrive per run on `Deps`.
+
+    Instructions are a sequence: the standing ones, then this turn's rules, then
+    the plan. The last two are functions because they differ per run, and
+    pydantic-ai re-evaluates a callable on every request of a run, so both stay in
+    front of the actor across a whole turn of tool calls rather than only on the
+    first one. Rules before plan, because the plan is a route through them.
     """
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
-        instructions=[INSTRUCTIONS.format(policy=policy), plan_for_this_turn],
+        instructions=[
+            INSTRUCTIONS.format(standing=standing(policy), contents=contents(policy)),
+            rules_for_this_turn,
+            plan_for_this_turn,
+        ],
         deps_type=Deps,
         toolsets=[declared(tools)],
         output_type=[str, DeferredToolRequests],

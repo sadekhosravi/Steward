@@ -30,11 +30,11 @@ __all__ = ["Deps", "StewardState", "Obligation", "PendingCall", "invented", "ung
 class Deps(BaseModel):
     """What one run of the actor is handed besides its messages.
 
-    Both fields change with the conversation while the agent is built once, which
-    is why they arrive per run rather than baked into instructions. They travel
-    together because they are wanted in the same two places -- the toolset checks
-    an argument against `observed`, the instructions carry `plan` -- and pydantic-ai
-    allows a run exactly one dependency object.
+    All three change with the conversation while the agent is built once, which is
+    why they arrive per run rather than baked into instructions. They travel
+    together because pydantic-ai allows a run exactly one dependency object, and
+    they are wanted in the same two places: the toolset checks an argument against
+    `observed`, and the instructions carry `plan` and `policy`.
     """
 
     observed: list[str] = Field(default_factory=list)
@@ -42,6 +42,11 @@ class Deps(BaseModel):
 
     plan: str = ""
     """The planner's route for this turn, rendered. Empty when there is none."""
+
+    policy: str = ""
+    """The policy sections this turn was routed to. Empty when it was routed to
+    none -- the escalation run, which is not doing any more work and needs no
+    procedure to do it by."""
 
 
 class PendingCall(BaseModel):
@@ -114,6 +119,15 @@ class StewardState(BaseModel):
     Written once when a user message arrives and left alone until the next one:
     the tool results that come back mid-turn are answers to the plan, not reasons
     to rewrite it, and a plan that moves while it is being followed is not one.
+    """
+
+    policy: str = ""
+    """The policy sections the planner routed this turn to, rendered.
+
+    Written and left alone on the same schedule as `plan`, and for the same
+    reason: the rules governing a turn are settled when it is planned, and a
+    procedure that changes underneath the actor half way through a change is
+    worse than the wrong one chosen up front.
     """
 
     observed: list[str] = Field(default_factory=list)
