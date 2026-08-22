@@ -32,7 +32,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import ExternalToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
-from core.state import invented
+from core.state import Deps, invented
 
 __all__ = ["MAX_RETRIES", "ValidatedToolset"]
 
@@ -83,22 +83,22 @@ class _SchemaValidator:
         return self.validate_python(json.loads(input or "{}"), **kwargs)
 
 
-def _grounded(ctx: RunContext[list[str]], **arguments: Any) -> None:
+def _grounded(ctx: RunContext[Deps], **arguments: Any) -> None:
     """Refuse identifiers the system was never shown.
 
     Runs after the schema passes, on the validated arguments. The ledger arrives
-    as `ctx.deps` because it grows with the conversation while the toolset is built
+    on `ctx.deps` because it grows with the conversation while the toolset is built
     once -- so it is passed per run, not captured here.
     """
-    paths = invented(arguments, ctx.deps or [])
+    paths = invented(arguments, ctx.deps.observed if ctx.deps else [])
     if paths:
         raise ModelRetry(INVENTED.format(paths=", ".join(f"`{p}`" for p in paths)))
 
 
-class ValidatedToolset(ExternalToolset[list[str]]):
+class ValidatedToolset(ExternalToolset[Deps]):
     """`ExternalToolset`, with the declared schema treated as binding."""
 
-    async def get_tools(self, ctx: RunContext[list[str]]) -> dict[str, ToolsetTool[list[str]]]:
+    async def get_tools(self, ctx: RunContext[Deps]) -> dict[str, ToolsetTool[Deps]]:
         return {
             tool_def.name: ToolsetTool(
                 toolset=self,

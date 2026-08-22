@@ -7,6 +7,8 @@ The adapter sets it from tau2's `mutates_state`, widened to cover the handoff.
 
 from __future__ import annotations
 
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 _RESERVATION_ID = {
@@ -36,3 +38,18 @@ CANCEL = ToolDefinition(
     },
     metadata={"gated": True},
 )
+
+
+def plans(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A planner stand-in that answers anything with the same empty-handed plan.
+
+    Every Kernel now opens with a planning call, so a test that scripts only the
+    actor would have its actor script answering the planner's question. This exists
+    so those tests stay about what they were about. The plan says nothing on
+    purpose: a test asserting on the actor's behaviour should not be able to pass
+    because the plan told it what to do.
+    """
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"goal": "Help them."})])
+
+
+PLANNER = FunctionModel(plans)

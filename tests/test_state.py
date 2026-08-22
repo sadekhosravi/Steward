@@ -7,7 +7,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
 from core.state import Obligation, StewardState, ungrounded, unmet
-from tests.tools import LOOKUP
+from tests.tools import LOOKUP, PLANNER
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
 
@@ -73,7 +73,12 @@ def call_then_report(messages: list[ModelMessage], info: AgentInfo) -> ModelResp
 
 def test_user_messages_and_tool_results_both_enter_the_ledger():
     """Provenance is only as good as its intake: both sources have to land."""
-    k = Kernel([LOOKUP], policy="Be helpful.", model=FunctionModel(call_then_report))
+    k = Kernel(
+        [LOOKUP],
+        policy="Be helpful.",
+        model=FunctionModel(call_then_report),
+        planner_model=PLANNER,
+    )
     thread = k.new_thread()
 
     paused = k.send(thread, "check HKD3PS please")

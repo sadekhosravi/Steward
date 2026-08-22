@@ -6,14 +6,24 @@ on the shape of a plan rather than on a model's opinion of one.
 
 from __future__ import annotations
 
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
+from agents.gate import transcript
 from agents.planner import Plan, brief, build_planner, catalogue, render
+from core.kernel import Act, Kernel, Say
 from tests.tools import CANCEL, LOOKUP
 
 POLICY = "Cancellations within 24 hours are free."
+
+GOAL = "Cancel the reservation and refund it."
 
 
 # --- scripted models --------------------------------------------------------
@@ -148,3 +158,118 @@ def test_the_plan_tells_the_actor_it_may_deviate():
 def test_a_plan_with_nothing_in_it_still_renders():
     """The model can return a goal and no lists; that must not raise on the way to the actor."""
     assert "Goal: Anything." in render(Plan(goal="Anything."))
+
+
+# --- wiring -----------------------------------------------------------------
+
+
+def _counted(behaviour):
+    """A model that records how many times it was asked anything."""
+    calls: list[int] = []
+
+    def wrapped(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(1)
+        return behaviour(messages, info)
+
+    return wrapped, calls
+
+
+def _plans_the_goal(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"goal": GOAL})])
+
+
+def _refuses_to_plan(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Answers in prose when an output tool was required -- the documented 20B failure.
+
+    pydantic-ai retries it, and when the retries run out the run raises. That is the
+    path this exercises: what the graph does when the planner never answers.
+    """
+    return ModelResponse(parts=[TextPart("I would rather not.")])
+
+
+def _looks_up_then_reports(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    if not [p for m in messages for p in m.parts if isinstance(p, ToolCallPart)]:
+        call = ToolCallPart("get_reservation", {"reservation_id": "HKD3PS"}, tool_call_id="c1")
+        return ModelResponse(parts=[call])
+    return ModelResponse(parts=[TextPart("Done.")])
+
+
+def _records_instructions(seen: list[str]):
+    def actor(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(m.instructions for m in messages if getattr(m, "instructions", None))
+        return ModelResponse(parts=[TextPart("Hello.")])
+
+    return actor
+
+
+def test_the_planner_runs_once_per_user_turn_not_once_per_tool_call():
+    """The whole cost argument for putting `plan` at the entry rather than in the loop.
+
+    A turn of many tool calls re-enters `think` every time and `plan` never, because
+    `resume` returns into `act` and rejoins the graph below it.
+    """
+    planner, planned = _counted(_plans_the_goal)
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_looks_up_then_reports),
+        planner_model=FunctionModel(planner),
+    )
+    thread = k.new_thread()
+
+    paused = k.send(thread, "cancel HKD3PS")
+    assert isinstance(paused, Act)
+    k.resume(thread, {paused.calls[0].id: "HKD3PS: economy"})
+
+    assert len(planned) == 1
+
+
+def test_the_plan_reaches_the_actor_as_instructions():
+    seen: list[str] = []
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_records_instructions(seen)),
+        planner_model=FunctionModel(_plans_the_goal),
+    )
+    k.send(k.new_thread(), "cancel HKD3PS")
+
+    assert any(GOAL in instructions for instructions in seen)
+
+
+def test_the_plan_never_enters_the_conversation():
+    """The reason it is instructions and not a prompt.
+
+    `transcript` renders every user part as "Customer:", so a plan prepended to the
+    message would reach the gate as something the customer said, and the gate would
+    judge the actor against words nobody spoke.
+    """
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_looks_up_then_reports),
+        planner_model=FunctionModel(_plans_the_goal),
+    )
+    thread = k.new_thread()
+    k.send(thread, "cancel HKD3PS")
+
+    state = k.graph.get_state({"configurable": {"thread_id": thread}}).values
+    history = ModelMessagesTypeAdapter.validate_python(state["messages"])
+
+    assert GOAL in state["plan"]
+    assert GOAL not in transcript(history)
+
+
+def test_a_planner_that_never_answers_does_not_stop_the_turn():
+    """It fails open where the gate fails closed. A verdict that never arrived
+    authorises nothing; a plan that never arrived withholds only the advice."""
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_records_instructions([])),
+        planner_model=FunctionModel(_refuses_to_plan),
+    )
+    step = k.send(k.new_thread(), "cancel HKD3PS")
+
+    assert isinstance(step, Say)
+    assert step.text == "Hello."

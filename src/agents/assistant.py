@@ -6,9 +6,16 @@ benchmark's contract, so the agent never holds a callable it could fire by
 accident. `toolset` makes the declared schema binding rather than decorative;
 see there for why that is not the default.
 
-The agent's dependency is the provenance ledger, which is how the toolset knows
-what the system has actually been shown. It is passed per run rather than bound
-at build time, because it grows with the conversation and the agent is built once.
+The agent's dependency is `Deps`: the provenance ledger, which is how the toolset
+knows what the system has actually been shown, and the planner's route for this
+turn. Both are passed per run rather than bound at build time, because both grow
+with the conversation and the agent is built once.
+
+The plan reaches the model as a second, *dynamic* instructions block rather than
+as part of the prompt. That is not a style choice. A plan prepended to the user
+message would be indistinguishable from something the customer said -- `transcript`
+renders every `UserPromptPart` as "Customer:" -- and the gate would then be
+judging the actor against words it put in the customer's mouth.
 
 The instructions below are not general advice. Every section of them answers a
 failure counted in the 50-task diagnostic run: invented identifiers (41% of all
@@ -21,17 +28,18 @@ about how to operate, so what a policy leaves unsaid is what has to be said here
 
 from __future__ import annotations
 
-from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.models import Model
 from pydantic_ai.tools import ToolDefinition
 
 import llm
 from agents.toolset import declared
+from core.state import Deps
 
-__all__ = ["Assistant", "build_assistant"]
+__all__ = ["Assistant", "build_assistant", "plan_for_this_turn"]
 
-Assistant = Agent[list[str], "str | DeferredToolRequests"]
-"""The actor. Deps are `observed`, the provenance ledger."""
+Assistant = Agent[Deps, "str | DeferredToolRequests"]
+"""The actor. Deps are the provenance ledger and this turn's plan."""
 
 INSTRUCTIONS = """
 You are a customer service agent for the company whose policy appears at the end
@@ -125,6 +133,16 @@ yours to give -- and not because you are unsure. Unsure means look it up or ask.
 """.strip()
 
 
+def plan_for_this_turn(ctx: RunContext[Deps]) -> str:
+    """The planner's route, as instructions rather than as a message.
+
+    Returns nothing at all when there is no plan -- an empty run, a turn the
+    planner could not answer for -- so the actor is never shown an empty heading
+    to read meaning into.
+    """
+    return ctx.deps.plan if ctx.deps else ""
+
+
 def build_assistant(
     tools: list[ToolDefinition], policy: str, model: str | Model | None = None
 ) -> Assistant:
@@ -132,11 +150,16 @@ def build_assistant(
 
     `model` is a model id, or a ready-made model when the caller has one -- which
     is how tests hand it a scripted stand-in instead of a live endpoint.
+
+    Instructions are a sequence: the standing ones, then the plan, which is a
+    function because it differs per run. pydantic-ai re-evaluates the callable on
+    every request of a run, so the plan stays in front of the actor across a whole
+    turn of tool calls rather than only on the first one.
     """
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
-        instructions=INSTRUCTIONS.format(policy=policy),
-        deps_type=list[str],
+        instructions=[INSTRUCTIONS.format(policy=policy), plan_for_this_turn],
+        deps_type=Deps,
         toolsets=[declared(tools)],
         output_type=[str, DeferredToolRequests],
     )

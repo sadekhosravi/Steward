@@ -22,7 +22,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from agents.gate import NO_FINDINGS, OUTPUT_RETRIES, UNAVAILABLE, findings, transcript
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
 from core.state import PendingCall
-from tests.tools import CANCEL, LOOKUP
+from tests.tools import CANCEL, LOOKUP, PLANNER
 
 SEEN_ID = "HKD3PS"
 INVENTED_ID = "H0000X"
@@ -155,6 +155,7 @@ def kernel(actor, critic) -> Kernel:
         policy="Cancel only after looking the reservation up.",
         model=FunctionModel(actor),
         gate_model=FunctionModel(critic),
+        planner_model=PLANNER,
     )
 
 
@@ -203,6 +204,7 @@ def test_an_unlabelled_tool_is_treated_as_a_write():
         policy="Be careful.",
         model=FunctionModel(proposes_a_cancellation),
         gate_model=FunctionModel(critic),
+        planner_model=PLANNER,
     )
     k.send("t", f"cancel {SEEN_ID}")
 

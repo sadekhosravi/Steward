@@ -6,7 +6,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Act, Kernel, Say
-from tests.tools import LOOKUP
+from tests.tools import LOOKUP, PLANNER
 
 
 def call_then_report(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -27,7 +27,9 @@ def always_reply(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse
 
 
 def kernel(behaviour) -> Kernel:
-    return Kernel([LOOKUP], policy="Be helpful.", model=FunctionModel(behaviour))
+    return Kernel(
+        [LOOKUP], policy="Be helpful.", model=FunctionModel(behaviour), planner_model=PLANNER
+    )
 
 
 def test_a_turn_with_no_tool_calls_ends_immediately():

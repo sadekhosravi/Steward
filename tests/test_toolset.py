@@ -16,6 +16,7 @@ from pydantic_ai.tools import ToolDefinition
 
 from adapters.tau2.schemas import tighten
 from agents.toolset import MAX_RETRIES, ValidatedToolset, _grounded, _SchemaValidator
+from core.state import Deps
 
 # tau2 declares every nested model as "the real thing, or any object at all", so
 # an incomplete passenger validates. This is that shape, not an invention.
@@ -91,8 +92,11 @@ def test_a_half_streamed_call_is_not_judged():
 
 
 class _Deps:
+    """A `RunContext` stand-in: the grounding check reads `ctx.deps.observed` and
+    nothing else, so nothing else has to exist for it."""
+
     def __init__(self, observed: list[str]):
-        self.deps = observed
+        self.deps = Deps(observed=observed)
 
 
 def test_an_identifier_that_was_never_shown_is_refused():

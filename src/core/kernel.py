@@ -12,12 +12,17 @@ they run those calls against the real environment, and `resume()` feeds the
 results back in. Sub-agents added later inherit this for free: an interrupt
 resumes inside the node that raised it, however deep in the graph it sits.
 
-    think -> gate -> act -> think -> ... -> END
+    plan -> think -> gate -> act -> think -> ... -> END
 
 Nothing reaches `act` without passing `gate` first, and `act` emits `approved`
 rather than `calls`. That is structural on purpose: an approval that does not
 bind the thing executed is not an approval, so there is no path on which a call
 is emitted that the gate never saw.
+
+`plan` sits at the entry rather than in the loop, and that placement is the whole
+of its cost control: a turn of twenty tool calls re-enters `think` twenty times
+and `plan` never, because `resume()` returns into `act` and rejoins below it. One
+planning call per user message, whatever the turn goes on to cost.
 
     kernel = Kernel(tools, policy)
     thread = kernel.new_thread()
@@ -51,7 +56,8 @@ from pydantic_core import to_jsonable_python
 import tracing
 from agents.assistant import Assistant, build_assistant
 from agents.gate import UNAVAILABLE, Approved, Verdict, build_gate, review
-from core.state import PendingCall, StewardState
+from agents.planner import Plan, brief, build_planner, render
+from core.state import Deps, PendingCall, StewardState
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -113,6 +119,21 @@ def _history(state: StewardState) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(state.messages)
 
 
+def _plan(state: StewardState, planner: Agent[None, Plan]) -> dict[str, Any]:
+    """Write down the route before the actor starts composing calls.
+
+    Fails *open*, which is the opposite of the gate beside it and for the same
+    reason. A verdict that never arrived authorises nothing, so a missing one has
+    to refuse; a plan that never arrived withholds nothing, so a missing one costs
+    only the advice. The actor has solved tasks without it for three runs.
+    """
+    try:
+        plan = planner.run_sync(brief(_history(state), state.prompt)).output
+    except UnexpectedModelBehavior:
+        return {"plan": ""}
+    return {"plan": render(plan)}
+
+
 def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
     """Ask the assistant what to do next, given everything that has happened.
 
@@ -129,7 +150,7 @@ def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
         # likely source of an identifier the actor is about to use, and it does not
         # reach `observed` until this node returns -- so passing the stored ledger
         # alone would reject a reservation id the customer gave a moment ago.
-        deps=state.observed + seen,
+        deps=Deps(observed=state.observed + seen, plan=state.plan),
     )
     output = run.output
     calls = (
@@ -217,7 +238,10 @@ def _escalate(state: StewardState, assistant: Assistant) -> dict[str, Any]:
         deferred_tool_results=DeferredToolResults(calls=denied),
         output_type=str,
         toolsets=[],
-        deps=state.observed,
+        # No plan: this run exists to end the turn by talking to the customer, and
+        # a list of changes still to make is the one thing it must not be urged
+        # towards. The ledger stays -- what it says is still true.
+        deps=Deps(observed=state.observed),
     )
     return {
         "messages": to_jsonable_python(run.all_messages()),
@@ -262,14 +286,17 @@ def _traced(name: str, node: Callable[[StewardState], dict[str, Any]]):
 def build_graph(
     assistant: Assistant,
     gate: Agent[None, Verdict],
+    planner: Agent[None, Plan],
     gated: frozenset[str],
 ) -> Any:
     graph = StateGraph(StewardState)
+    graph.add_node("plan", _traced("plan", partial(_plan, planner=planner)))
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
     graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
     graph.add_node("act", _act)
     graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
-    graph.add_edge(START, "think")
+    graph.add_edge(START, "plan")
+    graph.add_edge("plan", "think")
     graph.add_conditional_edges("think", _route_think, {"gate": "gate", END: END})
     graph.add_conditional_edges(
         "gate", _route_gate, {"act": "act", "think": "think", "escalate": "escalate"}
@@ -300,13 +327,16 @@ class Kernel:
         policy: str,
         model: str | Model | None = None,
         gate_model: str | Model | None = None,
+        planner_model: str | Model | None = None,
     ):
-        """`gate_model` lets the critic run on a different model from the actor.
-        Defaulting it to the actor's model keeps one knob until there is a reason
-        for two; resolving *which* model is a caller's job, not the Kernel's."""
+        """`gate_model` and `planner_model` let the critic and the planner run on a
+        different model from the actor. Both default to the actor's, which keeps one
+        knob until there is a reason for three; resolving *which* model is a
+        caller's job, not the Kernel's."""
         self.graph = build_graph(
             build_assistant(tools, policy, model),
             build_gate(policy, gate_model if gate_model is not None else model),
+            build_planner(tools, policy, planner_model if planner_model is not None else model),
             _gated(tools),
         )
 

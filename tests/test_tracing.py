@@ -54,7 +54,34 @@ def test_every_decision_the_kernel_makes_is_on_the_record(spans):
     kernel(proposes_a_cancellation, approves).send("t", "cancel HKD3PS")
 
     names = {s.name for s in _finished(spans)}
-    assert {"message", "think", "gate"} <= names
+    assert {"message", "plan", "think", "gate"} <= names
+
+
+def test_the_plan_span_carries_the_plan(spans):
+    """The same argument as the gate span below. A plan the actor was working from
+    but nobody can read is a run you cannot explain afterwards -- and the planner
+    is now upstream of every tool call in the system."""
+    kernel(proposes_a_cancellation, approves).send("t", "cancel HKD3PS")
+
+    (planned,) = _named(spans, "plan")
+    assert (
+        "Help them." in _attribute(planned, LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT)["plan"]
+    )
+
+
+def test_the_planners_own_model_call_is_instrumented(spans):
+    """`setup` instruments pydantic-ai globally rather than agent by agent, which is
+    what makes a sub-agent added later traced without anyone remembering to opt it
+    in. This is the test that would notice if that stopped being true."""
+    kernel(proposes_a_cancellation, approves).send("t", "cancel HKD3PS")
+
+    (planned,) = _named(spans, "plan")
+    generations = [
+        s
+        for s in _finished(spans)
+        if s.parent is not None and s.parent.span_id == planned.context.span_id
+    ]
+    assert generations
 
 
 def test_the_gate_span_carries_the_verdict(spans):

@@ -24,7 +24,24 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["StewardState", "Obligation", "PendingCall", "invented", "ungrounded", "unmet"]
+__all__ = ["Deps", "StewardState", "Obligation", "PendingCall", "invented", "ungrounded", "unmet"]
+
+
+class Deps(BaseModel):
+    """What one run of the actor is handed besides its messages.
+
+    Both fields change with the conversation while the agent is built once, which
+    is why they arrive per run rather than baked into instructions. They travel
+    together because they are wanted in the same two places -- the toolset checks
+    an argument against `observed`, the instructions carry `plan` -- and pydantic-ai
+    allows a run exactly one dependency object.
+    """
+
+    observed: list[str] = Field(default_factory=list)
+    """The provenance ledger, as of this run."""
+
+    plan: str = ""
+    """The planner's route for this turn, rendered. Empty when there is none."""
 
 
 class PendingCall(BaseModel):
@@ -90,6 +107,14 @@ class StewardState(BaseModel):
 
     revisions: int = 0
     """Blocked attempts so far this user turn. Bounds the correction loop."""
+
+    plan: str = ""
+    """The planner's route for this turn, rendered for the actor to read.
+
+    Written once when a user message arrives and left alone until the next one:
+    the tool results that come back mid-turn are answers to the plan, not reasons
+    to rewrite it, and a plan that moves while it is being followed is not one.
+    """
 
     observed: list[str] = Field(default_factory=list)
     """Every text the system has been shown: user messages and tool results."""
