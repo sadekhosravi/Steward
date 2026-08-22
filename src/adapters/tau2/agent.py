@@ -24,6 +24,7 @@ from tau2.environment.tool import Tool
 from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
 from adapters.tau2.descriptions import describe
+from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
 from core.kernel import Act, Kernel, Step
 
@@ -113,7 +114,10 @@ class StewardAgent(HalfDuplexAgent[AgentState]):
         gate_model: str | Model | None = None,
     ):
         super().__init__(tools=tools, domain_policy=domain_policy)
-        self.kernel = Kernel([_tool_def(t) for t in tools], domain_policy, model, gate_model)
+        declared = [_tool_def(t) for t in tools]
+        self.kernel = Kernel(
+            declared, domain_policy, model, gate_model, reference=reference(declared)
+        )
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:
         return AgentState(thread=self.kernel.new_thread())

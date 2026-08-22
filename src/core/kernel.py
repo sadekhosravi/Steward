@@ -337,13 +337,18 @@ class Kernel:
         model: str | Model | None = None,
         gate_model: str | Model | None = None,
         planner_model: str | Model | None = None,
+        reference: str = "",
     ):
         """`gate_model` and `planner_model` let the critic and the planner run on a
         different model from the actor. Both default to the actor's, which keeps one
         knob until there is a reason for three; resolving *which* model is a
-        caller's job, not the Kernel's."""
+        caller's job, not the Kernel's.
+
+        `reference` is domain knowledge the policy assumes and never states. The
+        Kernel does not know what is in it and does not look: deciding that is the
+        adapter's job, which is what keeps `core` free of any one environment."""
         self.graph = build_graph(
-            build_assistant(tools, policy, model),
+            build_assistant(tools, policy, model, reference),
             build_gate(policy, gate_model if gate_model is not None else model),
             build_planner(tools, policy, planner_model if planner_model is not None else model),
             _gated(tools),

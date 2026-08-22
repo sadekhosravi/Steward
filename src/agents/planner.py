@@ -65,16 +65,20 @@ class Plan(BaseModel):
         default_factory=list,
         description=(
             "What has to be found out before anything is decided, one line each, "
-            "naming the tool that answers it. Refer to identifiers by where they "
-            "will come from, never by a value."
+            "naming the tool that answers it. A price, a fee or a difference is "
+            "something to find out like any other fact -- name the tool that returns "
+            "it. Refer to identifiers by where they will come from, never by a value."
         ),
     )
     confirm: str | None = Field(
         default=None,
         description=(
             "What the customer must be told and must agree to before the records are "
-            "touched -- the price, the difference, the penalty. Name the figure to be "
-            "quoted, or the tool that works it out. Null when nothing will be changed."
+            "touched -- the price, the difference, the penalty. Name the figure and "
+            "where it comes from: which tool returns the numbers, and what is taken "
+            "from what. Both, never the figure alone -- a number with nowhere to come "
+            "from is one the assistant ends up asking the customer for. Null when "
+            "nothing will be changed."
         ),
     )
     changes: list[str] = Field(
@@ -121,6 +125,13 @@ costs, what is still available -- is a lookup, and stays one even when the
 customer has already told you. The record is the authority, not their description
 of it.
 
+A price is a lookup. What a reservation cost is on the reservation; what it would
+cost now is in the flight search, which reports a price for every cabin on every
+flight it returns. So the difference between two cabins, or between two
+itineraries, is two reads and a subtraction, and it is never something to ask the
+customer for -- they do not know it, and the one number they must agree to is the
+one thing you cannot take their word for.
+
 You do not have any identifiers and you must not write one down. You are planning
 before the lookups have run, so no reservation id, order id, payment id or flight
 number is known to you yet. Name one by where it will come from -- "the
@@ -131,9 +142,11 @@ AGREEING
 
 `confirm` is what the customer has to be told, and has to accept, before anything
 is written: the price, the fare difference, the cancellation penalty, the fact
-that it cannot be undone. Name the figure that has to be quoted, or say it has to
-be worked out first and with which tool. If the plan changes nothing, `confirm`
-is null.
+that it cannot be undone. Say which figure has to be quoted and where it comes
+from -- the tool that returns the numbers and the subtraction that turns them into
+the amount. Naming the figure alone leaves the assistant owing the customer a
+number it has no way to reach, and asking them for it is how the turn ends without
+the change being made. If the plan changes nothing, `confirm` is null.
 
 CHANGING
 
@@ -160,6 +173,11 @@ every area the request touches: a cancellation that ends in money going back
 needs the cancelling rules and the refund rules both, and a customer who asks
 what a change would cost is asking about modifying whether or not they go through
 with it. Reading a section that turned out not to matter costs nothing.
+
+A policy states a fee once, in the section for the action that first incurs it,
+and it goes on applying everywhere else. So when a turn involves money, name the
+section that sets the amount as well as the section that permits the action: what
+a bag costs is written where bags are first bought, not where they are later added.
 
 Copy the names exactly as they appear here:
 

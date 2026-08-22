@@ -184,7 +184,10 @@ def rules_for_this_turn(ctx: RunContext[Deps]) -> str:
 
 
 def build_assistant(
-    tools: list[ToolDefinition], policy: str, model: str | Model | None = None
+    tools: list[ToolDefinition],
+    policy: str,
+    model: str | Model | None = None,
+    reference: str = "",
 ) -> Assistant:
     """An agent whose run ends with either a reply or the tool calls it wants made.
 
@@ -194,6 +197,12 @@ def build_assistant(
     `policy` is the whole domain policy. What is built in here is the part that
     holds whatever the turn is about, plus the list of section names; the sections
     themselves arrive per run on `Deps`.
+
+    `reference` is what the domain assumes and never states -- for the airline,
+    which cities the airport codes belong to. It is a separate element rather than
+    a slot inside the instructions so that a domain with nothing to say adds
+    nothing at all, not a blank line where a heading would go. It is static: it
+    describes the environment, which does not change between turns.
 
     Instructions are a sequence: the standing ones, then this turn's rules, then
     the plan. The last two are functions because they differ per run, and
@@ -205,6 +214,7 @@ def build_assistant(
         model=model if isinstance(model, Model) else llm.get_model(model),
         instructions=[
             INSTRUCTIONS.format(standing=standing(policy), contents=contents(policy)),
+            *([reference] if reference else []),
             rules_for_this_turn,
             plan_for_this_turn,
         ],
