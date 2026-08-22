@@ -20,6 +20,16 @@ into tasks nobody solves, and the loss lands on the same metric it was meant to
 protect. So the instructions are deliberately biased toward approval, and a
 block has to name the rule it is enforcing.
 
+The instructions carry worked examples, and they lean three-to-three by count but
+entirely one way in what they are correcting. The write-failure breakdown of run
+003 is the reason: of the 25 tasks needing a write, 2 were won, 13 wrote
+something wrong, and 10 never wrote at all -- 6 talking until the customer gave
+up, 4 handing off. Under-writing is the failure mode, so the approve examples all
+show evidence the gate is likely to overlook (a value inside a returned record, a
+timestamp it has to subtract for itself, agreement phrased as anything but
+"yes"), and the block examples all name a rule the API will not enforce. An
+example that only rehearses a block the gate already gets right buys nothing.
+
 A block is also the only thing the actor ever hears from this node. `remediation`
 is handed to it verbatim as a retry prompt and is the whole of what it has to work
 from, which makes an unactionable refusal worse than no refusal at all: it spends
@@ -30,7 +40,7 @@ instructions ask for a refusal written as an instruction, not as a complaint.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, UnexpectedModelBehavior
 from pydantic_ai.messages import (
     ModelMessage,
     RetryPromptPart,
@@ -45,38 +55,50 @@ import llm
 from core.state import PendingCall, ungrounded
 
 __all__ = [
+    "ATTEMPTS",
+    "FALLBACK",
     "UNAVAILABLE",
-    "Approved",
-    "Blocked",
     "Verdict",
     "build_gate",
+    "decide",
     "findings",
     "review",
     "transcript",
 ]
 
 
-class Approved(BaseModel):
-    """The action is permitted. It will be executed exactly as proposed."""
+class Verdict(BaseModel):
+    """One decision about one proposed step.
 
-    reason: str = Field(description="One sentence: why the policy allows this now.")
+    A flag on a single type rather than an `Approved | Blocked` union. The union
+    was the better shape and it is what this was: two output tools, so a refusal
+    without a fix was unrepresentable rather than merely discouraged. It was
+    measured and dropped. Over the 15-task runs the gate raised on 48% of the
+    verdicts it was asked for, and 9 of those failures in one run were the model
+    unable to choose between the two output tools inside its retry budget. Every
+    one of them failed closed and blocked an action nobody had judged.
 
+    One tool cannot be chosen wrongly. What the union enforced, `decide` now
+    repairs after the fact.
+    """
 
-class Blocked(BaseModel):
-    """The action is not permitted, and will not be executed."""
-
-    violation: str = Field(description="The policy rule this breaks, in one sentence.")
-    remediation: str = Field(
+    allowed: bool = Field(
+        description="True if the policy permits this action now. False if it does not."
+    )
+    reason: str = Field(
         description=(
-            "What to do instead, written as a direct instruction to the assistant "
-            "that it can act on immediately."
+            "One sentence naming the rule and the fact that settles it: what permits "
+            "this action, or what it breaks."
         )
     )
-
-
-Verdict = Approved | Blocked
-"""Two output types rather than one with a flag, so the shape carries the rule:
-there is no way to express a block without a fix, or a pass with a complaint."""
+    remediation: str = Field(
+        default="",
+        description=(
+            "Only when `allowed` is false: one instruction the assistant can carry "
+            "out on its very next turn -- the tool to call, the question to ask, the "
+            "value to fetch. Leave empty when the action is allowed."
+        ),
+    )
 
 
 INSTRUCTIONS = """
@@ -105,8 +127,12 @@ APPROVE UNLESS THE POLICY FORBIDS IT
 The policy below is your only authority. If it does not prohibit this action,
 approve it. Do not invent requirements, do not apply general caution, and do not
 block because you would have gone about it differently or in a different order.
-Blocking a permitted action costs exactly what allowing a forbidden one costs --
-either way the customer is not helped.
+
+Understand what a block costs. The assistant gets two corrections and is then
+stopped and made to talk to the customer. Every block you issue spends one of
+them, and a customer who is talked at instead of helped leaves. A wrongly blocked
+action and a wrongly allowed one lose exactly the same thing: the customer is not
+helped. You are not the safe choice. You are one of two ways to fail.
 
 WHAT TO BLOCK
 
@@ -119,14 +145,100 @@ WHAT TO BLOCK
 - A figure was worked out in the assistant's head and it is wrong.
 - The action does not do what the customer actually asked for.
 
+WHAT IS NOT A REASON TO BLOCK
+
+Each of these refuses an action the policy allows, and they are the expensive
+mistake -- far more common than letting something through.
+
+- The evidence is in a tool result rather than in a sentence. A value returned by
+  a lookup is established. Read it and do the arithmetic or the comparison
+  yourself. Do not require the assistant to have stated the conclusion out loud.
+- The customer agreed in their own words. Clear agreement is agreement: go ahead,
+  that is fine, please do, sounds good. The policy asks for a clear yes, not for
+  the word yes.
+- One confirmation covers the action it described. If the customer was told what
+  would happen and agreed, they do not have to agree again for each call it takes
+  to carry it out.
+- An automated check flagged something. A value nested inside a returned record,
+  or reformatted, is still a value the assistant was shown. Go and look for it
+  before treating the flag as real.
+- You would have looked something up first. If the policy does not require that
+  check, its absence is not a violation.
+- The request is unusual, awkward, or expensive. None of those are policy.
+- You are not certain. Absence of a prohibition is permission. If you cannot name
+  the rule and the fact that breaks it, you do not have grounds.
+
+WORKED EXAMPLES
+
+Example 1 -- APPROVE. The evidence is sitting in a tool result.
+  Proposed: cancel_reservation with reservation_id 4WQ150
+  The customer gave their user id and said their plans changed. get_reservation
+  returned the reservation with created_at 2024-05-15 09:12:00, and the current
+  time is 2024-05-15 15:00:00.
+  The booking was made within the last 24 hours, which the policy accepts on its
+  own. The assistant never said the words within 24 hours. It did not have to --
+  you have the timestamp and you can subtract.
+
+Example 2 -- APPROVE. Agreement in the customer's own words.
+  Proposed: update_reservation_baggages with total_baggages 3, nonfree_baggages 1
+  The assistant said that adding one extra checked bag costs 50 dollars and asked
+  whether to go ahead. The customer replied: yeah that is fine, do it.
+  The details were listed, the price was named, the customer agreed. Refusing for
+  want of the literal word yes blocks an action the policy permits.
+
+Example 3 -- APPROVE. A flag that is not a finding.
+  Proposed: update_reservation_baggages with payment_id gift_card_6276644
+  AUTOMATED CHECKS reports payment_id as unseen. get_user returned the customer's
+  profile earlier in the conversation and that gift card is one of its payment
+  methods. The check matches text and missed it nested inside the record. The
+  value was established.
+
+Example 4 -- BLOCK. A hard rule the tool will not enforce.
+  Proposed: update_reservation_flights on a reservation that get_reservation
+  returned with cabin basic economy
+  reason: the policy says basic economy flights cannot be modified, and
+  get_reservation shows this reservation is basic economy.
+  remediation: Tell the customer a basic economy reservation cannot have its
+  flights changed, and offer to change the cabin class instead.
+  The API will accept this call. Nothing else will stop it. This is the block
+  that earns the gate its place.
+
+Example 5 -- BLOCK. Agreement to something never named.
+  Proposed: book_reservation for three passengers with insurance true
+  The customer asked to book and the assistant collected the names and dates of
+  birth, but no total and no insurance price were ever quoted to them.
+  reason: the policy requires the action details and an explicit confirmation
+  before booking, and the customer has not been told what this costs.
+  remediation: Tell the customer the fare total plus 30 dollars per passenger for
+  insurance, and ask them to confirm before you book.
+
+Example 6 -- BLOCK. A handoff standing in for a refusal.
+  Proposed: transfer_to_human_agents, because the customer is asking for a refund
+  the policy does not allow
+  reason: the policy permits a transfer only when a request cannot be handled
+  within the assistant's own actions, and refusing a request is one of them.
+  remediation: Tell the customer that this refund is not something the policy
+  allows and explain why, then ask what else you can do for them.
+
+HOW TO ANSWER
+
+Always three fields, whichever way you decide.
+
+`allowed` is true if the policy permits this action now, false if it does not.
+
+`reason` is one sentence naming the rule and the fact that settles it.
+
+`remediation` is filled in only when `allowed` is false, and left empty when it
+is true.
+
 HOW TO REFUSE
 
 Your refusal is handed to the assistant word for word and is all it gets. It will
 read it and try again, so it has to be usable.
 
-`violation` names the rule and the fact that breaks it, together. Not "the
-customer did not confirm" but "the policy requires the customer to confirm the
-fare difference before a change is made, and they have not been told what it is."
+`reason` names the rule and the fact that breaks it, together. Not "the customer
+did not confirm" but "the policy requires the customer to confirm the fare
+difference before a change is made, and they have not been told what it is."
 
 `remediation` is one instruction the assistant can carry out on its very next
 turn. Name the tool to call, the question to ask, or the value to fetch: "Tell
@@ -185,22 +297,34 @@ CAVEAT = (
 NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the conversation."
 
 
-# A union output type gives the model two output tools to choose between, and a
-# 20B model sometimes answers in prose instead of choosing. pydantic-ai's default
-# budget of one retry makes a single fumble raise, and a raise inside the gate
-# takes the whole simulation down: Run 002 lost one that way, and replaying real
-# writes through the gate offline reproduced it in 3 cases out of 8. Retries are
-# cheap; the failure they prevent costs a task outright.
+# Malformed answers from the model, inside one `run_sync`. A 20B model sometimes
+# answers in prose instead of filling the output tool in, and pydantic-ai's
+# default budget of one retry makes a single fumble raise.
 OUTPUT_RETRIES = 3
+
+# Whole `run_sync` calls, when the one above is exhausted or never gets going.
+# The two runs on the 15-task set raised on 48% of the verdicts asked for, and
+# most of those were not the model at all: NVIDIA NIM intermittently returns a
+# completion with a null `id`, pydantic-ai rejects it as malformed, and one bad
+# packet became a blocked write. That failure arrives on the first call and costs
+# nothing to retry, which is the whole argument for this constant.
+ATTEMPTS = 3
 
 # The verdict used when no verdict was reached. Refusing is not a judgement about
 # the action -- it is the only honest thing to say about an action nobody checked,
 # and it is recoverable: the actor proposes again, the gate is asked again, and
 # the revision cap ends the turn by talking to the customer if it never answers.
-UNAVAILABLE = Blocked(
-    violation="The policy check did not complete, so this action was never authorised.",
+UNAVAILABLE = Verdict(
+    allowed=False,
+    reason="The policy check did not complete, so this action was never authorised.",
     remediation="Propose the same action again.",
 )
+
+# What a refusal that named no fix is turned into. The union output type used to
+# make this unrepresentable; with one output type the model can leave the field
+# empty, so the repair happens here instead. Ending the turn is the right default:
+# a refusal nobody can act on spends a revision and leaves the actor where it was.
+FALLBACK = "Do not repeat this action. Tell the customer what you need from them."
 
 
 def build_gate(policy: str, model: str | Model | None = None) -> Agent[None, Verdict]:
@@ -208,9 +332,35 @@ def build_gate(policy: str, model: str | Model | None = None) -> Agent[None, Ver
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
         instructions=INSTRUCTIONS.format(policy=policy),
-        output_type=[Approved, Blocked],
+        output_type=Verdict,
         retries={"output": OUTPUT_RETRIES},
     )
+
+
+def decide(gate: Agent[None, Verdict], case: str, attempts: int = ATTEMPTS) -> Verdict:
+    """Get a verdict, or refuse. Never raises.
+
+    A raise here used to mean one thing and now means another. It used to be the
+    model failing to answer, which is a judgement of sorts. Measurement showed it
+    is mostly the provider handing back a response the client will not parse --
+    an action refused because of a bad packet, with the customer told to try
+    again. So the call is retried before the refusal stands.
+
+    A block that named no fix is repaired rather than passed on: `remediation` is
+    handed to the actor verbatim and is all it gets, and an empty one costs it a
+    revision to read nothing.
+    """
+    for remaining in range(attempts, 0, -1):
+        try:
+            verdict = gate.run_sync(case).output
+        except UnexpectedModelBehavior:
+            if remaining == 1:
+                return UNAVAILABLE
+            continue
+        if not verdict.allowed and not verdict.remediation.strip():
+            return verdict.model_copy(update={"remediation": FALLBACK})
+        return verdict
+    return UNAVAILABLE
 
 
 def review(messages: list[ModelMessage], proposal: list[PendingCall], observed: list[str]) -> str:

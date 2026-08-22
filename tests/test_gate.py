@@ -19,7 +19,14 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from agents.gate import NO_FINDINGS, OUTPUT_RETRIES, UNAVAILABLE, findings, transcript
+from agents.gate import (
+    FALLBACK,
+    NO_FINDINGS,
+    OUTPUT_RETRIES,
+    UNAVAILABLE,
+    findings,
+    transcript,
+)
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
 from core.state import PendingCall
 from tests.tools import CANCEL, LOOKUP, PLANNER
@@ -31,14 +38,13 @@ INVENTED_ID = "H0000X"
 # --- scripted models --------------------------------------------------------
 
 
-def _verdict(info: AgentInfo, kind: str, payload: dict) -> ModelResponse:
-    """Answer with one of the gate's output types, whatever pydantic-ai named it."""
-    tool = next(t for t in info.output_tools if t.name.endswith(kind))
-    return ModelResponse(parts=[ToolCallPart(tool.name, payload)])
+def _verdict(info: AgentInfo, **payload: object) -> ModelResponse:
+    """Answer with the gate's output type, whatever pydantic-ai named it."""
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, payload)])
 
 
 def approves(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    return _verdict(info, "Approved", {"reason": "The policy permits this."})
+    return _verdict(info, allowed=True, reason="The policy permits this.")
 
 
 def blocks_once():
@@ -53,14 +59,12 @@ def blocks_once():
     def critic(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         seen.append(1)
         if len(seen) > 1:
-            return _verdict(info, "Approved", {"reason": "The reservation was looked up."})
+            return _verdict(info, allowed=True, reason="The reservation was looked up.")
         return _verdict(
             info,
-            "Blocked",
-            {
-                "violation": "The reservation was never looked up.",
-                "remediation": "Look it up first.",
-            },
+            allowed=False,
+            reason="The reservation was never looked up.",
+            remediation="Look it up first.",
         )
 
     return critic
@@ -69,16 +73,23 @@ def blocks_once():
 def always_blocks(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     return _verdict(
         info,
-        "Blocked",
-        {"violation": "Basic economy cannot be modified.", "remediation": "Do not cancel this."},
+        allowed=False,
+        reason="Basic economy cannot be modified.",
+        remediation="Do not cancel this.",
     )
 
 
-def fumbles(times: int):
-    """Answers in prose `times` times before choosing an output tool.
+def blocks_without_a_fix(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A refusal with the remediation left empty -- unrepresentable while the
+    output type was a union, and merely discouraged now that it is one model."""
+    return _verdict(info, allowed=False, reason="Not allowed.")
 
-    The observed failure: a union output type gives the model two output tools to
-    pick between, and a small one sometimes just talks instead.
+
+def fumbles(times: int):
+    """Answers in prose `times` times before filling the output tool in.
+
+    The observed failure: a small model sometimes just talks instead of calling
+    the tool it was asked to call.
     """
     seen: list[int] = []
 
@@ -357,6 +368,35 @@ def test_a_gate_that_fumbles_its_answer_is_asked_again():
     assert isinstance(step, Act)
 
 
+def test_a_gate_whose_whole_call_fails_is_called_again():
+    """The measured failure this retry exists for. Across the two 15-task runs the
+    gate raised on 48% of the verdicts it was asked for, and most of those were the
+    provider returning a completion with a null `id` that the client refuses to
+    parse -- so a legitimate write was blocked by a bad packet. It arrives on the
+    first call and costs nothing to retry.
+
+    `fumbles(OUTPUT_RETRIES + 1)` exhausts the in-run retry budget once, which is
+    what makes `run_sync` raise; the answer on the far side of that raise is the
+    thing being tested.
+    """
+    step = kernel(proposes_a_cancellation, fumbles(OUTPUT_RETRIES + 1)).send(
+        "t", f"cancel {SEEN_ID}"
+    )
+
+    assert isinstance(step, Act)
+
+
+def test_a_refusal_that_names_no_fix_is_given_one():
+    """`remediation` reaches the actor verbatim and is all it gets, so an empty one
+    spends a revision on nothing. The union output type made this unrepresentable;
+    with one output type it has to be repaired instead."""
+    k = kernel(refuses_to_give_up, blocks_without_a_fix)
+    k.send("t", "cancel HKD3PS")
+
+    history = str(k.graph.get_state({"configurable": {"thread_id": "t"}}).values["messages"])
+    assert FALLBACK in history
+
+
 def test_a_gate_that_never_answers_blocks_instead_of_raising():
     """Refusing is the only honest verdict on an action nobody checked -- and it
     costs one action, where the exception cost the whole task."""
@@ -365,7 +405,7 @@ def test_a_gate_that_never_answers_blocks_instead_of_raising():
 
     assert isinstance(step, Say)
     history = str(k.graph.get_state({"configurable": {"thread_id": "t"}}).values["messages"])
-    assert UNAVAILABLE.violation in history
+    assert UNAVAILABLE.reason in history
 
 
 def test_a_gate_that_never_answers_emits_no_write():

@@ -55,7 +55,7 @@ from pydantic_core import to_jsonable_python
 
 import tracing
 from agents.assistant import Assistant, build_assistant
-from agents.gate import UNAVAILABLE, Approved, Verdict, build_gate, review
+from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
 from core.state import Deps, PendingCall, StewardState
 
@@ -72,7 +72,7 @@ RECURSION_LIMIT = 100
 # loop is the obvious way to produce more.
 REVISION_LIMIT = 2
 
-DENIAL = "This action was not performed. {violation} {remediation}"
+DENIAL = "This action was not performed. {reason} {remediation}"
 
 ESCALATION = (
     "You have already tried to correct this and it is still not allowed. Stop here: "
@@ -191,17 +191,15 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     if not any(call.name in gated for call in proposal):
         return {"approved": state.calls, "calls": []}
 
-    try:
-        verdict = gate.run_sync(review(_history(state), proposal, state.observed)).output
-    except UnexpectedModelBehavior:
-        # The gate never produced a usable verdict. Letting that propagate ends
-        # the simulation and scores 0; refusing costs one action and is
-        # recoverable, so an unanswered check fails closed.
-        verdict = UNAVAILABLE
-    if isinstance(verdict, Approved):
+    # `decide` retries and never raises: letting a failure propagate ends the
+    # simulation and scores 0, where refusing costs one action and is
+    # recoverable. An unanswered check still fails closed, but only after the
+    # call has been given more than one chance to come back.
+    verdict = decide(gate, review(_history(state), proposal, state.observed))
+    if verdict.allowed:
         return {"approved": state.calls, "calls": []}
 
-    message = DENIAL.format(violation=verdict.violation, remediation=verdict.remediation)
+    message = DENIAL.format(reason=verdict.reason, remediation=verdict.remediation)
     return {
         "approved": [],
         "calls": [],
