@@ -1,11 +1,17 @@
 """Turning a `ModelSpec` into a live pydantic-ai model.
 
-Both supported providers speak the OpenAI wire protocol, so both are served by
+Every supported provider speaks the OpenAI wire protocol, so all are served by
 `OpenAIChatModel`; only the provider object underneath differs. pydantic-ai has
 no dedicated NVIDIA/NIM provider, so NVIDIA Build is reached with the generic
 `OpenAIProvider` pointed at its base URL -- the documented way to use an
-OpenAI-compatible endpoint, not a workaround. OpenRouter has a first-class
-provider, which is why switching to it is a one-line change.
+OpenAI-compatible endpoint, not a workaround. Groq is reached the same way.
+OpenRouter has a first-class provider, which is why switching to it is a
+one-line change.
+
+Adding a provider is a dict entry and nothing else, which is the point: which
+endpoint serves a model is a deployment fact, and the same model id appears on
+several of them -- `openai/gpt-oss-120b` is served by NVIDIA Build and by Groq
+under exactly that name, at different speeds and prices.
 """
 
 from __future__ import annotations
@@ -51,6 +57,23 @@ PROVIDERS: dict[str, ProviderInfo] = {
         api_key_env="NVIDIA_API_KEY",
         litellm_prefix="nvidia_nim",
         catalog_url="https://build.nvidia.com/models",
+    ),
+    "gemini": ProviderInfo(
+        name="gemini",
+        # Google's OpenAI-compatibility layer rather than the native API, so
+        # Gemini arrives as another `OpenAIChatModel` like everything else. The
+        # trailing slash is required: the path is a prefix, not a host root.
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key_env="GEMINI_API_KEY",
+        litellm_prefix="gemini",
+        catalog_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    "groq": ProviderInfo(
+        name="groq",
+        base_url="https://api.groq.com/openai/v1",
+        api_key_env="GROQ_API_KEY",
+        litellm_prefix="groq",
+        catalog_url="https://console.groq.com/docs/models",
     ),
     "openrouter": ProviderInfo(
         name="openrouter",
