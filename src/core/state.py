@@ -261,6 +261,21 @@ class StewardState(BaseModel):
     replans: int = 0
     """Mid-turn plans written so far. Bounds the cost of asking again."""
 
+    request: str = ""
+    """What the customer asked for, at the scope they asked for it.
+
+    Held apart from `plan` and rewritten on a different clock. The plan is
+    reworked every time a lookup comes back, and the run shows what that does to
+    the scope: one task's goals went "a reservation", "reservation(s)", "each of
+    Omar Davis's reservations", "reservation JG7FMM", and then JG7FMM three more
+    times -- the request shrinking to the record that happened to have been read
+    most recently, with the other four never mentioned by anybody again.
+
+    So this is settable only when the customer has spoken. A mid-turn re-plan
+    carries it unchanged, which makes the narrowing above unrepresentable rather
+    than merely discouraged -- the lookup that caused it is exactly the thing that
+    can no longer rewrite it. See `_plan`."""
+
     changes: list[Change] = Field(default_factory=list)
     """The writes the request needs, as the planner has described them so far.
 

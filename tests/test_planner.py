@@ -117,7 +117,7 @@ def test_the_goal_is_the_shape_of_the_records_not_a_ruling():
     """The field description is the only place the model is told what `goal` is for."""
     described = Plan.model_fields["goal"].description or ""
 
-    assert "never a verdict" in described
+    assert "Never a verdict" in described
 
 
 def test_the_planner_is_given_no_tools_to_call():
@@ -187,7 +187,7 @@ def test_the_plan_tells_the_actor_it_may_deviate():
 
 def test_a_plan_with_nothing_in_it_still_renders():
     """The model can return a goal and no lists; that must not raise on the way to the actor."""
-    assert "Goal: Anything." in render(Plan(goal="Anything."))
+    assert "Goal for this turn: Anything." in render(Plan(goal="Anything."))
 
 
 # --- wiring -----------------------------------------------------------------
@@ -495,3 +495,58 @@ def test_a_planner_that_never_answers_does_not_stop_the_turn():
 
     assert isinstance(step, Say)
     assert step.text == "Hello."
+
+
+# --- the request, and what may rewrite it ------------------------------------
+
+WIDE = "Change the cabin on all four of Omar Davis's upcoming reservations."
+NARROW = "Change the cabin on reservation JG7FMM."
+
+
+def test_a_lookup_cannot_narrow_the_request():
+    """The failure this guards, verbatim from the last full run: a plan said "each
+    of Omar Davis's reservations" and then, one lookup later, "reservation
+    JG7FMM". The other four were never mentioned by anybody again."""
+    values = _state_after_one_lookup(
+        FunctionModel(
+            _plans_in_turn(
+                {"request": WIDE, "goal": GOAL},
+                {"request": NARROW, "goal": GOAL},
+            )
+        )
+    )
+
+    assert values["request"] == WIDE
+
+
+def test_the_customer_speaking_is_what_rewrites_the_request():
+    """The other direction. A scope that could never change would be worse than one
+    that drifts: the customer is allowed to ask for something else."""
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_just_replies),
+        planner_model=FunctionModel(
+            _plans_in_turn({"request": WIDE, "goal": GOAL}, {"request": NARROW, "goal": GOAL})
+        ),
+    )
+    k.send("t", "change the cabin on all of them")
+    k.send("t", "actually, only do JG7FMM")
+
+    values = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert values["request"] == NARROW
+
+
+def test_the_actor_is_shown_the_request_and_the_turn_separately():
+    text = render(Plan(request=WIDE, goal="JG7FMM is in economy."))
+    assert f"What the customer asked for: {WIDE}" in text
+    assert "Goal for this turn: JG7FMM is in economy." in text
+
+
+def test_the_standing_request_is_put_to_the_planner():
+    assert WIDE in brief([], None, standing=WIDE)
+    assert "word for word" in brief([], None, standing=WIDE)
+
+
+def _just_replies(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return ModelResponse(parts=[TextPart("Right you are.")])

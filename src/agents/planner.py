@@ -74,11 +74,23 @@ __all__ = ["OUTPUT_RETRIES", "Plan", "brief", "build_planner", "catalogue", "ren
 class Plan(BaseModel):
     """The route from what the customer is asking for to it being done."""
 
+    request: str = Field(
+        default="",
+        description=(
+            "The whole of what the customer has asked for, in one sentence, in their "
+            "terms and at their scope -- 'change the cabin on all four of their "
+            "upcoming reservations', not 'change the cabin on JG7FMM'. This outlives "
+            "the turn: if one is already standing, copy it forward word for word "
+            "unless the customer has since asked for something different. Never "
+            "narrow it to the record you happen to have just read."
+        ),
+    )
     goal: str = Field(
         description=(
-            "What the customer wants, in one sentence, as the records would have to "
-            "end up for it to be true. Always that shape, and never a verdict: "
-            "whether the policy permits it is settled elsewhere."
+            "What this turn is for, as the records would have to end up for it to be "
+            "true. This one may be a single step of the request -- the part that can "
+            "be done now. Never a verdict: whether the policy permits it is settled "
+            "elsewhere."
         )
     )
     lookups: list[str] = Field(
@@ -138,6 +150,30 @@ The assistant can already read the policy. What it loses hold of is the shape of
 the whole job while it is busy writing one tool call, so it looks up too little
 and stops part-way through a change that needed three steps. Your plan is what it
 checks itself against. Write down the steps it would otherwise forget.
+
+THE REQUEST AND THIS TURN ARE TWO DIFFERENT THINGS
+
+`request` is the whole of what the customer wants, at the scope they asked for it.
+`goal` is what this turn is for, which may be one step of it.
+
+Keep them apart, because the way this plan goes wrong is that they collapse into
+one. You are asked again every time a lookup comes back, so you see one record at
+the moment you are asked -- and a request covering four reservations quietly
+becomes a request covering the one just read. In the last full run a plan went
+"each of Omar Davis's reservations" and then, one lookup later, "reservation
+JG7FMM", and the other four were never mentioned again by anybody. Nothing
+downstream can restore a scope you drop here.
+
+So `request` is written in the customer's terms and at the customer's scope, and
+once written it is copied forward word for word. THE REQUEST AS IT STANDS, when
+the brief carries one, is what you copy. Change it only when the customer has
+asked for something different -- not when a lookup has told you something new,
+and not when part of it is done. `goal` is where progress goes.
+
+It is a scope in both directions. "Cancel the two flights for the Chicago trip"
+does not become "cancel their reservations": a request narrower than everything
+the customer holds stays narrow, and every record outside it is one nobody asked
+you to touch.
 
 FINDING OUT
 
@@ -304,6 +340,12 @@ WHAT THE CUSTOMER HAS JUST ASKED FOR
 # Only shown when there is something to show. A heading over an empty list reads
 # as an instruction to find something to put there, which is the same reason
 # `render` leaves empty sections out of the plan.
+STANDING = (
+    "THE REQUEST AS IT STANDS\n"
+    "Written when this request opened, before any of the lookups below had run. "
+    "Copy it into `request` word for word. Replace it only if the customer has "
+    "since asked for something different."
+)
 ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
 DONE = "CHANGES ALREADY MADE IN THIS CONVERSATION"
 OWED = (
@@ -370,6 +412,7 @@ def brief(
     arrived: dict[str, str] | None = None,
     done: list[Written] | None = None,
     owed: list[Change] | None = None,
+    standing: str = "",
 ) -> str:
     """The case put to the planner: what has happened, and what was just asked.
 
@@ -393,6 +436,8 @@ def brief(
         transcript=transcript(messages) or "(nothing yet)",
         request=request or "(nothing new -- continue from the conversation above)",
     )
+    if standing:
+        case = f"{case}\n\n{STANDING}\n{standing}"
     if arrived:
         results = "\n".join(f"- {' '.join(str(text).split())}" for text in arrived.values())
         case = f"{case}\n\n{ARRIVED}\n{results}"
@@ -411,7 +456,10 @@ def render(plan: Plan) -> str:
     under it reads as an instruction to find something to put there, and for a task
     that genuinely needs no write that is the wrong nudge entirely.
     """
-    body = [f"Goal: {plan.goal}"]
+    body = []
+    if plan.request:
+        body += [f"What the customer asked for: {plan.request}"]
+    body += [f"Goal for this turn: {plan.goal}"]
     if plan.lookups:
         body += ["", "Find out first:", *_numbered(plan.lookups)]
     if plan.confirm:

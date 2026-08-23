@@ -215,7 +215,14 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     owed = outstanding(state.changes, state.written)
     try:
         plan = planner.run_sync(
-            brief(_history(state), state.prompt, state.tool_results, state.written, owed)
+            brief(
+                _history(state),
+                state.prompt,
+                state.tool_results,
+                state.written,
+                owed,
+                state.request,
+            )
         ).output
     except UnexpectedModelBehavior:
         if not opening:
@@ -231,8 +238,15 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # which a planner that has decided the job is done would otherwise drop and
     # silently disarm the speaker.
     sections = plan.policy_sections if opening else _widen(state.sections, plan.policy_sections)
+    # Only the customer can change what the customer is asking for. A mid-turn
+    # re-plan is a response to a lookup, and a lookup is the one thing that must
+    # not be able to rewrite the scope -- it is what narrowed the request to the
+    # record it had just returned. Asking the planner not to do that is the
+    # instruction; not accepting the answer is the guarantee.
+    request = plan.request if opening and plan.request else state.request
     return {
-        "plan": render(plan),
+        "request": request,
+        "plan": render(plan.model_copy(update={"request": request})),
         "policy": excerpt(policy, sections),
         "sections": sections,
         # Widened on *both* branches, which is the change the multi-record failure
