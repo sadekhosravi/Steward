@@ -90,7 +90,7 @@ from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
-from core.state import Demand, Deps, PendingCall, StewardState
+from core.state import Demand, Deps, PendingCall, StewardState, pruned
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -244,7 +244,9 @@ def _widen(kept: list[str], added: list[str]) -> list[str]:
     return list(dict.fromkeys([*kept, *added]))
 
 
-def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
+def _think(
+    state: StewardState, assistant: Assistant, schemas: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     """Ask the assistant what to do next, given everything that has happened.
 
     Also the one place new evidence enters, because it is the one node that sees
@@ -271,7 +273,15 @@ def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
     calls = (
         [
             PendingCall(
-                id=c.tool_call_id, name=c.tool_name, arguments=c.args_as_dict()
+                id=c.tool_call_id,
+                name=c.tool_name,
+                # Here rather than in the toolset because a deferred call carries
+                # the model's own `ToolCallPart` through untouched -- what the
+                # validator returns is used for tools pydantic-ai executes itself,
+                # and ours are executed by tau2. This is the first point the
+                # arguments are ours to hold, and pruning before the gate means the
+                # critic reviews the call that will actually be made.
+                arguments=pruned(c.args_as_dict(), schemas.get(c.tool_name, {})),
             ).model_dump()
             for c in output.calls
         ]
@@ -503,11 +513,12 @@ def build_graph(
     planner: Agent[None, Plan],
     speaker: Agent[None, Verdict],
     gated: frozenset[str],
+    schemas: dict[str, dict[str, Any]],
     policy: str,
 ) -> Any:
     graph = StateGraph(StewardState)
     graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
-    graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
+    graph.add_node("think", _traced("think", partial(_think, assistant=assistant, schemas=schemas)))
     graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
     graph.add_node("speak", _traced("speak", partial(_speak, speaker=speaker)))
     graph.add_node("act", _act)
@@ -545,6 +556,15 @@ def _gated(tools: list[ToolDefinition]) -> frozenset[str]:
     return frozenset(t.name for t in tools if (t.metadata or {}).get("gated", True))
 
 
+def _schemas(tools: list[ToolDefinition]) -> dict[str, dict[str, Any]]:
+    """Each tool's parameter schema, by name, for `pruned` to hold calls to.
+
+    The same schema the model was shown, so nothing is removed that the actor was
+    ever led to believe would be read.
+    """
+    return {t.name: t.parameters_json_schema for t in tools}
+
+
 class Kernel:
     """Drives one compiled graph over many conversations, one thread each."""
 
@@ -572,6 +592,7 @@ class Kernel:
             build_planner(tools, policy, planner_model if planner_model is not None else model),
             build_speaker(policy, speaker_model if speaker_model is not None else model),
             _gated(tools),
+            _schemas(tools),
             policy,
         )
 

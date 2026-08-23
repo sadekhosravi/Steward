@@ -35,6 +35,7 @@ __all__ = [
     "duplicated",
     "invented",
     "mispriced",
+    "pruned",
     "sources",
     "ungrounded",
     "unmet",
@@ -531,3 +532,60 @@ def _occurrences(text: str, needle: str) -> list[int]:
 def _figure(value: float) -> str:
     """A number as the corpus would spell it: `114`, not `114.0`."""
     return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def pruned(arguments: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """The same arguments with every key the schema does not declare removed.
+
+    tau2 scores an action by comparing the whole argument dict it received against
+    the gold one, over the keys *we* sent -- `tool_args == action_args` in
+    `tasks.Action.compare`. So an extra key nothing reads is not ignored, it is a
+    miss. The environment discards it, the database ends up identical, and the run
+    is still marked wrong.
+
+    That is not hypothetical: six of the write misses in the 50-task run were calls
+    the model got right and then decorated, putting `origin`, `destination` and
+    `price` inside `flights` entries whose schema declares `flight_number` and
+    `date`. The model is not confused about the itinerary; it is padding an object
+    with what it happens to know.
+
+    Removing rather than refusing, because this is decidable outright: the schema
+    the model was shown is the schema the environment accepts, and a key outside it
+    can have no effect on anything. A `ModelRetry` would spend a round trip to
+    reach the same dict, and the published gate ablations are consistent about what
+    a check that makes the model think again costs when the deterministic answer
+    was already in hand.
+    """
+    return _prune(arguments, schema, schema)
+
+
+def _prune(value: Any, node: Any, root: dict[str, Any]) -> Any:
+    """One value against one schema node, following `$ref` back to `root`."""
+    node = _resolved(node, root)
+    if not isinstance(node, dict):
+        return value
+    # A choice of shapes is a choice of key sets, and picking the wrong one would
+    # delete a key that was right. `tighten` collapses the only such branch tau2
+    # produces, so this is the guard for a schema nobody has looked at yet.
+    if any(key in node for key in ("anyOf", "oneOf", "allOf")):
+        return value
+    if isinstance(value, dict):
+        properties = node.get("properties")
+        if not isinstance(properties, dict) or node.get("additionalProperties"):
+            return value
+        return {
+            name: _prune(item, properties[name], root)
+            for name, item in value.items()
+            if name in properties
+        }
+    if isinstance(value, list) and isinstance(node.get("items"), dict):
+        return [_prune(item, node["items"], root) for item in value]
+    return value
+
+
+def _resolved(node: Any, root: dict[str, Any]) -> Any:
+    """A `#/$defs/Name` reference, followed. Anything else, unchanged."""
+    if isinstance(node, dict) and isinstance(node.get("$ref"), str):
+        name = node["$ref"].removeprefix("#/$defs/")
+        return root.get("$defs", {}).get(name, node)
+    return node

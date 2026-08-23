@@ -6,7 +6,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
-from core.state import Obligation, StewardState, duplicated, sources, ungrounded, unmet
+from core.state import Obligation, StewardState, duplicated, pruned, sources, ungrounded, unmet
 from tests.tools import LOOKUP, PLANNER
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
@@ -161,3 +161,95 @@ def test_only_identifiers_are_traced():
     """Same narrowing as `invented`: a date or a name can be legitimately rewritten,
     so quoting where it 'came from' would be quoting a coincidence."""
     assert sources({"first_name": "Sophia", "total_baggages": 2}, ["Sophia Silva"]) == []
+
+
+# The shape tau2 produces for a nested model, after `schemas.tighten` has
+# collapsed its "or any object at all" branch: a `$ref` into `$defs`.
+ITINERARY = {
+    "$defs": {
+        "FlightInfo": {
+            "type": "object",
+            "properties": {
+                "flight_number": {"type": "string"},
+                "date": {"type": "string"},
+            },
+            "required": ["flight_number", "date"],
+        }
+    },
+    "type": "object",
+    "properties": {
+        "reservation_id": {"type": "string"},
+        "cabin": {"type": "string"},
+        "flights": {"type": "array", "items": {"$ref": "#/$defs/FlightInfo"}},
+    },
+    "required": ["reservation_id", "cabin", "flights"],
+}
+
+
+def test_pruned_drops_undeclared_keys_inside_a_referenced_item():
+    """The failure this exists for: a correct itinerary, decorated."""
+    call = {
+        "reservation_id": "JG7FMM",
+        "cabin": "economy",
+        "flights": [
+            {
+                "flight_number": "HAT056",
+                "date": "2024-05-27",
+                "origin": "LGA",
+                "destination": "ORD",
+                "price": 146,
+            }
+        ],
+    }
+    assert pruned(call, ITINERARY) == {
+        "reservation_id": "JG7FMM",
+        "cabin": "economy",
+        "flights": [{"flight_number": "HAT056", "date": "2024-05-27"}],
+    }
+
+
+def test_pruned_leaves_a_call_that_was_already_right_alone():
+    call = {
+        "reservation_id": "JG7FMM",
+        "cabin": "economy",
+        "flights": [{"flight_number": "HAT056", "date": "2024-05-27"}],
+    }
+    assert pruned(call, ITINERARY) == call
+
+
+def test_pruned_drops_an_undeclared_top_level_argument():
+    call = {"reservation_id": "JG7FMM", "cabin": "economy", "flights": [], "total": 146}
+    assert "total" not in pruned(call, ITINERARY)
+
+
+def test_pruned_keeps_everything_when_there_is_no_schema():
+    """An unknown tool is not an excuse to throw arguments away."""
+    call = {"anything": {"at": "all"}}
+    assert pruned(call, {}) == call
+
+
+def test_pruned_keeps_everything_under_a_choice_of_shapes():
+    """Picking a branch could delete a key that belonged to the other one."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "payment": {
+                "anyOf": [
+                    {"type": "object", "properties": {"card": {"type": "string"}}},
+                    {"type": "object", "properties": {"certificate": {"type": "string"}}},
+                ]
+            }
+        },
+    }
+    call = {"payment": {"certificate": "certificate_7815826"}}
+    assert pruned(call, schema) == call
+
+
+def test_pruned_keeps_everything_where_the_schema_allows_extras():
+    schema = {
+        "type": "object",
+        "properties": {"note": {"type": "string"}},
+        "additionalProperties": True,
+    }
+    call = {"note": "hello", "extra": 1}
+    assert pruned(call, schema) == call
