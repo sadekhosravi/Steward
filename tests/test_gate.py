@@ -21,6 +21,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.gate import (
+    CAVEAT,
     FALLBACK,
     INSTRUCTIONS,
     NARROW,
@@ -39,7 +40,7 @@ from agents.gate import (
     transcript,
 )
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
-from core.state import Demand, PendingCall
+from core.state import Demand, PendingCall, mispriced
 from tests.tools import CANCEL, LOOKUP, PLANNER
 
 SEEN_ID = "HKD3PS"
@@ -695,3 +696,71 @@ def _plans_a_cancellation(messages: list[ModelMessage], info: AgentInfo) -> Mode
             )
         ]
     )
+
+
+# --- money attached to the wrong row -----------------------------------------
+
+
+SEARCH = (
+    '{"flight_number": "HAT139", "origin": "JFK", "destination": "SEA", '
+    '"prices": {"basic_economy": 87, "economy": 114, "business": 401}}\n'
+    '{"flight_number": "HAT271", "origin": "JFK", "destination": "SEA", '
+    '"prices": {"basic_economy": 92, "economy": 174, "business": 445}}'
+)
+
+
+def test_a_price_taken_from_the_neighbouring_flight_is_flagged():
+    """The booking the run lost: 114 is real, HAT271 is real, and 114 is not HAT271's."""
+    call = {"flights": [{"flight_number": "HAT271", "price": 114}]}
+
+    assert mispriced(call, [SEARCH]) == ["flights[0].price"]
+
+
+def test_a_price_shown_beside_its_own_flight_passes():
+    call = {"flights": [{"flight_number": "HAT271", "price": 174}]}
+
+    assert mispriced(call, [SEARCH]) == []
+
+
+def test_an_identifier_that_was_never_shown_is_left_to_the_other_check():
+    """`invented` owns that finding; reporting it here counts one fault twice."""
+    call = {"flights": [{"flight_number": "HAT999", "price": 114}]}
+
+    assert mispriced(call, [SEARCH]) == []
+
+
+def test_an_entry_with_no_money_in_it_is_not_examined():
+    assert (
+        mispriced({"flights": [{"flight_number": "HAT271", "date": "2024-05-22"}]}, [SEARCH]) == []
+    )
+
+
+def test_a_whole_number_is_matched_the_way_the_corpus_spells_it():
+    """The model returns 174.0 where the search said 174."""
+    call = {"flights": [{"flight_number": "HAT271", "price": 174.0}]}
+
+    assert mispriced(call, [SEARCH]) == []
+
+
+def test_each_leg_is_judged_against_its_own_flight():
+    call = {
+        "flights": [
+            {"flight_number": "HAT139", "price": 114},
+            {"flight_number": "HAT271", "price": 114},
+        ]
+    }
+
+    assert mispriced(call, [SEARCH]) == ["flights[1].price"]
+
+
+def test_the_gate_is_shown_the_mispricing_as_evidence():
+    call = PendingCall(
+        id="1",
+        name="book_reservation",
+        arguments={"flights": [{"flight_number": "HAT271", "price": 114}]},
+    )
+
+    reported = findings([call], [SEARCH])
+
+    assert "flights[0].price" in reported
+    assert CAVEAT in reported

@@ -60,7 +60,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 
 import llm
-from core.state import Demand, PendingCall, duplicated, sources, ungrounded
+from core.state import Demand, PendingCall, duplicated, mispriced, sources, ungrounded
 from workflows import for_policy
 
 __all__ = [
@@ -389,6 +389,11 @@ DEMAND = (
 
 REPEATED = "- {call}: `{paths}` are the same entry twice."
 
+MISPRICED = (
+    "- {call}: the figure at `{path}` was never shown beside the identifier it is "
+    "attached to here. Check it is that one's and not the neighbouring row's."
+)
+
 FROM = "- {path} = {value!r}\n    taken from: {snippet}"
 
 NOWHERE = "- {path} = {value!r}\n    taken from: nothing in the conversation."
@@ -536,9 +541,17 @@ def review(
 def findings(proposal: list[PendingCall], observed: list[str]) -> str:
     """PRE-GATE: the deterministic pass, reported as evidence rather than a verdict.
 
-    Two checks, both free and neither a judgement: values the assistant was never
-    shown, and entries it wrote down twice -- a passenger repeated on a booking, a
-    leg of an itinerary standing in for its own return.
+    Three checks, all free and none a judgement: values the assistant was never
+    shown, entries it wrote down twice -- a passenger repeated on a booking, a leg
+    of an itinerary standing in for its own return -- and money quoted against an
+    identifier it was never shown beside.
+
+    The third is the one the arithmetic did not explain. `calculate` was right
+    every time it was used across the diagnostic run; what went wrong was the
+    numbers going into it, and a booking was lost to twice the economy fare of a
+    flight the customer was not taking. Neither of the other two checks can see
+    that: the figure was shown, the entry is not a copy, and only the pairing is
+    wrong.
     """
     lines = [
         f"- {call.name}: the value given for `{name}` appears nowhere in what the "
@@ -550,6 +563,11 @@ def findings(proposal: list[PendingCall], observed: list[str]) -> str:
         REPEATED.format(call=call.name, paths=path)
         for call in proposal
         for path in duplicated(call.arguments)
+    ]
+    lines += [
+        MISPRICED.format(call=call.name, path=path)
+        for call in proposal
+        for path in mispriced(call.arguments, observed)
     ]
     return "\n".join([*lines, "", CAVEAT]) if lines else NO_FINDINGS
 

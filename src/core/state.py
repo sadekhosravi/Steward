@@ -34,6 +34,7 @@ __all__ = [
     "PendingCall",
     "duplicated",
     "invented",
+    "mispriced",
     "sources",
     "ungrounded",
     "unmet",
@@ -398,3 +399,135 @@ def _leaves(value: Any) -> list[str]:
 def unmet(obligations: list[Obligation], reply: str) -> list[Obligation]:
     """Obligations this reply does not discharge."""
     return [o for o in obligations if o.must_contain is None or o.must_contain not in reply]
+
+
+# How far either side of an identifier a figure counts as quoted with it, used
+# only where the surrounding text is not JSON and there is no object to read
+# instead. Generous on purpose: this is the fallback that must not invent a
+# finding, and a missed mispricing costs less than a wrongly flagged fare.
+WINDOW = 400
+
+# Argument names that carry money. Narrower than "any number": a date, a seat
+# count or a passenger age has no reason to appear beside a flight number, and
+# flagging those would bury the one finding that matters.
+_MONEY = ("price", "amount", "total", "cost", "fee")
+
+
+def mispriced(arguments: dict[str, Any], observed: list[str]) -> list[str]:
+    """Money quoted against an identifier it was never shown beside, as paths.
+
+    The third deterministic check, and the one that answers what the other two
+    cannot see. `invented` asks whether a value was shown at all and `duplicated`
+    whether an entry is a copy; a price is neither invented nor duplicated when it
+    is simply the wrong flight's. That is how the run lost a booking -- it charged
+    twice the economy fare of a flight the customer was not taking, a figure that
+    was genuinely in the transcript, attached to a flight number that was also
+    genuinely in the transcript, just not to each other.
+
+    Evidence and not a verdict, like `findings` around it: a fare the assistant
+    correctly worked out -- a difference, a total across two legs -- appears
+    nowhere beside anything and is not wrong for that. What it catches is the
+    figure copied off the neighbouring row.
+    """
+    flags = []
+    for path, entry in _entries(arguments):
+        money = {
+            name: value
+            for name, value in entry.items()
+            if name.lower() in _MONEY
+            and isinstance(value, int | float)
+            and not isinstance(value, bool)
+        }
+        if not money:
+            continue
+        windows = [
+            window
+            for _, identifier in _identifiers(entry)
+            for window in _windows(identifier, observed)
+        ]
+        # No window means the identifier itself was never shown, which is
+        # `invented`'s finding and not this one's. Reporting it here as well would
+        # be the same fault counted twice.
+        if not windows:
+            continue
+        flags += [
+            f"{path}{name}"
+            for name, value in money.items()
+            if not any(_figure(value) in window for window in windows)
+        ]
+    return flags
+
+
+def _entries(value: Any, path: str = "") -> list[tuple[str, dict[str, Any]]]:
+    """Every dict inside a JSON value, with the path to it. The call's own
+    arguments count: a top-level `total_price` beside a top-level id is the same
+    mistake one level up."""
+    if isinstance(value, dict):
+        return [(path, value)] + [
+            found for name, item in value.items() for found in _entries(item, f"{path}{name}.")
+        ]
+    if isinstance(value, list):
+        return [
+            found
+            for index, item in enumerate(value)
+            for found in _entries(item, f"{path.rstrip('.')}[{index}].")
+        ]
+    return []
+
+
+def _windows(identifier: str, observed: list[str]) -> list[str]:
+    """The object around each place an identifier was shown.
+
+    The object and not a span of characters. A flight search returns one entry per
+    flight, and every entry has a price in it, so any window wide enough to hold
+    one is wide enough to hold its neighbour -- which is the confusion this whole
+    check exists to catch. Matching braces is what makes "shown beside" mean the
+    same row rather than the same screenful. Tool results are JSON; text that is
+    not falls back to the span.
+    """
+    return [_object_around(text, at) for text in observed for at in _occurrences(text, identifier)]
+
+
+def _object_around(text: str, at: int) -> str:
+    """The innermost JSON object enclosing position `at`, or a span if there is none."""
+    start = _opening(text, at)
+    if start is None:
+        return text[max(0, at - WINDOW) : at + WINDOW]
+    return text[start : _closing(text, start)]
+
+
+def _opening(text: str, at: int) -> int | None:
+    depth = 0
+    for index in range(at - 1, -1, -1):
+        if text[index] == "}":
+            depth += 1
+        elif text[index] == "{":
+            if depth == 0:
+                return index
+            depth -= 1
+    return None
+
+
+def _closing(text: str, start: int) -> int:
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+def _occurrences(text: str, needle: str) -> list[int]:
+    found, at = [], text.find(needle)
+    while at != -1:
+        found.append(at)
+        at = text.find(needle, at + 1)
+    return found
+
+
+def _figure(value: float) -> str:
+    """A number as the corpus would spell it: `114`, not `114.0`."""
+    return str(int(value)) if float(value).is_integer() else str(value)
