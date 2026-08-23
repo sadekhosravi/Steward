@@ -310,6 +310,23 @@ unsure, finding the request awkward, or facing a request the policy refuses are
 not grounds: a refusal the assistant can state itself is the assistant's job, not
 a reason to transfer.
 
+WHAT THIS TURN STILL OWES
+
+This is what the turn was planned to change and you have not yet approved. It is
+context for the proposal, not a list of things to approve: a change appearing
+here is no reason to allow one that breaks a rule.
+
+It settles one case, and settles it against the proposal. **A handoff proposed
+while a change is outstanding is refused.** The assistant reached the point of
+being able to make that change and is leaving instead, and the transfer takes
+every outstanding item with it -- so the remediation is to make the outstanding
+call, and it is `recoverable`.
+
+A request the assistant should refuse does not change this. Refusing one thing
+and doing another are the same turn's work: a customer who asks for two
+cancellations and is entitled to one gets that one, and is told about the other.
+Two reservations, two answers, and the handoff gives neither.
+
 HOW TO APPROVE
 
 An approval is not a shrug. Give the reason in one sentence that names what makes
@@ -337,6 +354,9 @@ WHERE EACH IDENTIFIER CAME FROM
 
 WHAT YOU ALREADY REQUIRED
 {demands}
+
+WHAT THIS TURN STILL OWES
+{owed}
 """.strip()
 
 
@@ -354,6 +374,8 @@ NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the 
 NO_PROVENANCE = "The proposed action carries no identifiers."
 
 NO_DEMANDS = "Nothing. You have not refused any of these actions before."
+
+NOTHING_OWED = "Nothing. Every change this turn was planned to make has been approved."
 
 # Written as a reminder of the gate's own words rather than as a summary of them,
 # because the summary is the thing it gets wrong: asked "has the customer
@@ -488,15 +510,26 @@ def review(
     observed: list[str],
     demanded: list[Demand] | None = None,
     turn: int = 0,
+    owed: list[str] | None = None,
 ) -> str:
     """The case put to the gate: what happened, what is proposed, what looks off,
-    where each identifier came from, and what this gate has already required."""
+    where each identifier came from, what this gate has already required, and what
+    the turn has left to do.
+
+    `owed` is the same ledger the speaker counts against, and it is here because
+    the run showed both guards being right and the turn being lost between them:
+    the plan said cancel one reservation and refuse the other, the speaker held the
+    reply and named the call to make, the actor proposed a handoff instead, and
+    this node approved it with no idea a confirmed cancellation was outstanding. A
+    ledger only one guard can see does not cover the exit the other one guards.
+    """
     return REVIEW.format(
         transcript=transcript(messages) or "(nothing yet)",
         proposal="\n".join(f"{c.name}({_arguments(c.arguments)})" for c in proposal),
         findings=findings(proposal, observed),
         provenance=provenance(proposal, observed),
         demands=demands(proposal, demanded or [], turn),
+        owed="\n".join(f"- {line}" for line in owed) if owed else NOTHING_OWED,
     )
 
 

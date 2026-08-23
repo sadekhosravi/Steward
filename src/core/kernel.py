@@ -316,7 +316,19 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     # call has been given more than one chance to come back.
     verdict = decide(
         gate,
-        review(_history(state), proposal, state.observed, state.demanded, state.turns),
+        review(
+            _history(state),
+            proposal,
+            state.observed,
+            state.demanded,
+            state.turns,
+            # The same ledger the speaker counts against. Both exits from a turn
+            # are now judged knowing what the turn owes -- the run had the plan,
+            # the ledger and the speaker all correct and lost the task anyway,
+            # because the handoff leaves through this node and this node could
+            # not see any of it.
+            outstanding(state.changes, state.written),
+        ),
     )
     if verdict.allowed:
         return {

@@ -22,10 +22,12 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.gate import (
     FALLBACK,
+    INSTRUCTIONS,
     NARROW,
     NO_DEMANDS,
     NO_FINDINGS,
     NO_PROVENANCE,
+    NOTHING_OWED,
     OUTPUT_RETRIES,
     UNAVAILABLE,
     build_gate,
@@ -33,6 +35,7 @@ from agents.gate import (
     demands,
     findings,
     provenance,
+    review,
     transcript,
 )
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
@@ -633,3 +636,62 @@ def test_the_first_review_of_a_conversation_has_nothing_to_report():
     kernel(proposes_a_cancellation, records_then_approves(cases)).send("t", f"cancel {SEEN_ID}")
 
     assert NO_DEMANDS in cases[0]
+
+
+# --- what the turn still owes ------------------------------------------------
+
+
+OWED = "Cancel the reservation with cancel_reservation."
+
+
+def _case(owed: list[str] | None) -> str:
+    return review([], [PendingCall(id="1", name=CANCEL.name, arguments={})], [], owed=owed)
+
+
+def test_the_gate_is_shown_what_the_turn_still_owes():
+    """The run had the plan, the ledger and the speaker all correct and lost the
+    task anyway: the handoff leaves through the gate, and the gate could see none
+    of it."""
+    assert OWED in _case([OWED])
+
+
+def test_a_turn_owing_nothing_says_so_rather_than_showing_a_blank():
+    assert NOTHING_OWED in _case(None)
+    assert NOTHING_OWED in _case([])
+
+
+def test_the_gate_is_told_to_refuse_a_handoff_that_leaves_work_behind():
+    """The ledger is only worth showing it if it knows what the ledger decides."""
+    told = " ".join(INSTRUCTIONS.split())
+
+    assert "A handoff proposed while a change is outstanding is refused." in told
+
+
+def test_the_kernel_hands_the_gate_the_ledger_the_speaker_counts():
+    """Wiring: the same `outstanding` call, not a second list that can drift."""
+    cases: list[str] = []
+    k = Kernel(
+        [LOOKUP, CANCEL],
+        policy="Cancel only after looking the reservation up.",
+        model=FunctionModel(proposes_a_cancellation),
+        gate_model=FunctionModel(records_then_approves(cases)),
+        planner_model=FunctionModel(_plans_a_cancellation),
+    )
+
+    k.send("t", f"cancel {SEEN_ID}")
+
+    assert "Cancel it with cancel_reservation." in cases[0]
+
+
+def _plans_a_cancellation(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return ModelResponse(
+        parts=[
+            ToolCallPart(
+                info.output_tools[0].name,
+                {
+                    "goal": "The reservation is cancelled.",
+                    "changes": ["Cancel it with cancel_reservation."],
+                },
+            )
+        ]
+    )
