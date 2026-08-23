@@ -18,8 +18,14 @@ import pathlib
 
 import pytest
 from dotenv import find_dotenv, load_dotenv
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from workflows import CUSTOMER, Fact, Rule, Workflow, applicable, flat, unquoted
+from agents.gate import build_gate
+from agents.planner import build_planner
+from tests.tools import CANCEL as CANCEL_TOOL
+from tests.tools import PLANNER
+from workflows import CUSTOMER, Fact, Rule, Workflow, applicable, flat, for_policy, render, unquoted
 from workflows.airline import (
     AIRLINE,
     CANCEL,
@@ -205,14 +211,135 @@ def test_basic_economy_is_not_a_reason_to_refuse_a_cancellation():
     assert not any("economy" in rule.quote.lower() for rule in CANCEL.permits)
 
 
-def test_the_four_cancellation_conditions_are_carried_as_one_any_of_rule():
-    """Read as a conjunction they permit almost nothing, which is the shape of
-    every wrong refusal in the run."""
-    assert len(CANCEL.permits) == 1
+def test_the_four_cancellation_conditions_are_four_separate_alternatives():
+    """One rule each, so the rendering can put them under a heading that says any
+    one is enough. Carried as a single rule they flatten onto one line and stop
+    looking like a choice, which is the shape of every wrong refusal in the run."""
+    quotes = " ".join(rule.quote for rule in CANCEL.permits)
+
+    assert len(CANCEL.permits) == 4
     for condition in ("last 24 hrs", "cancelled by airline", "business flight", "travel insurance"):
-        assert condition in CANCEL.permits[0].quote
+        assert condition in quotes
 
 
 def test_the_only_hard_stop_on_a_cancellation_is_a_flown_segment():
     assert len(CANCEL.blocks) == 1
     assert "already been flown" in CANCEL.blocks[0].quote
+
+
+# --- how they are rendered ---------------------------------------------------
+
+
+def test_nothing_applicable_renders_as_nothing():
+    """The prompts interpolate this, so "" has to leave them as they were."""
+    assert render([]) == ""
+
+
+def test_a_rendered_workflow_names_its_section_and_its_facts():
+    text = render([CANCEL_TOY])
+
+    assert "Cancel   (policy section: Cancel flight)" in text
+    assert "the reservation id  <-  the customer" in text
+
+
+def test_permits_are_rendered_as_alternatives():
+    """The heading is the whole point of the `permits` list existing."""
+    assert "ALLOWED WHEN any single one of these holds" in render([CANCEL_TOY])
+
+
+def test_a_deciding_rule_is_rendered_with_the_policy_wording_under_it():
+    assert "policy: booked in the last 24 hrs" in render([CANCEL_TOY])
+
+
+def test_a_bulleted_quote_keeps_its_bullets():
+    """Flattened onto one line, four alternatives read as one long condition."""
+    listed = Workflow(
+        name="Cancel",
+        section="Cancel flight",
+        permits=(
+            Rule(
+                statement="Either will do.",
+                quote="A reservation can be cancelled\nif it was booked in the last 24 hrs.",
+            ),
+        ),
+    )
+
+    text = render([listed])
+
+    assert "A reservation can be cancelled\n" in text
+    assert "        if it was booked in the last 24 hrs." in text
+
+
+def test_a_rendering_of_a_grounded_policy_covers_every_workflow():
+    airline = for_policy(POLICY)
+
+    assert airline == ""
+
+
+@needs_data
+def test_the_airline_rendering_carries_all_seven_and_the_standing_rules():
+    text = for_policy(airline_policy())
+
+    for workflow in AIRLINE:
+        assert f"### {workflow.name}" in text
+    assert "ON EVERY REQUEST, WHATEVER IT IS" in text
+
+
+@needs_data
+def test_the_rendering_says_basic_economy_does_not_block_a_cabin_change():
+    """The one sentence this whole part exists to put in front of both agents."""
+    text = for_policy(airline_policy())
+
+    assert "all reservations, including basic economy, can change cabin" in text
+
+
+# --- and where they end up ---------------------------------------------------
+
+
+def instructions_of(agent) -> str:
+    """What an agent is told, taken from the request rather than from the agent.
+
+    Instructions arrive on the `ModelRequest` itself, which is the same seam
+    `test_policy` reads them through.
+    """
+    seen: list[str] = []
+
+    def record(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(m.instructions for m in messages if getattr(m, "instructions", None))
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, _blank(info))])
+
+    with agent.override(model=FunctionModel(record)):
+        agent.run_sync("anything")
+    return "\n".join(seen)
+
+
+def _blank(info: AgentInfo) -> dict[str, object]:
+    """The least an output tool will accept, whichever agent is being asked."""
+    required = info.output_tools[0].parameters_json_schema.get("required", [])
+    return {name: "" if name != "allowed" else True for name in required}
+
+
+@needs_data
+def test_the_planner_is_shown_the_workflows():
+    planner = build_planner([CANCEL_TOOL], airline_policy(), PLANNER)
+
+    told = instructions_of(planner)
+
+    assert "### Cancel a reservation" in told
+    assert "ALLOWED WHEN any single one of these holds" in told
+
+
+@needs_data
+def test_the_gate_is_shown_the_workflows():
+    gate = build_gate(airline_policy(), PLANNER)
+
+    told = instructions_of(gate)
+
+    assert "### Change the cabin on a reservation" in told
+    assert "all reservations, including basic economy, can change cabin" in told
+
+
+def test_a_policy_with_no_workflows_still_builds_both_agents():
+    """The interpolation has to survive a domain nothing was transcribed for."""
+    assert "### " not in instructions_of(build_planner([CANCEL_TOOL], POLICY, PLANNER))
+    assert "### " not in instructions_of(build_gate(POLICY, PLANNER))

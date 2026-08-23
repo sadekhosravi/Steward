@@ -503,17 +503,27 @@ CANCEL = Workflow(
             ),
         ),
     ),
+    # Four alternatives, one rule each, because that is how they have to be read.
+    # Carried as a single rule they render as one long line and stop looking like
+    # a choice. Basic economy is not among them -- and neither is anything else: a
+    # cancellation refused on a ground that is not on this list is refused on a
+    # ground the policy does not have.
     permits=(
         Rule(
-            statement=(
-                "Any ONE of these four is enough. The cabin being basic economy is not "
-                "among them and does not prevent a cancellation."
-            ),
+            statement="Bought in the last 24 hours, counting from the reservation's created time.",
+            quote="- The booking was made within the last 24 hrs",
+        ),
+        Rule(
+            statement="The airline cancelled the flight.",
+            quote="- The flight is cancelled by airline",
+        ),
+        Rule(
+            statement="The reservation's cabin is business.",
+            quote="- It is a business flight",
+        ),
+        Rule(
+            statement="The reservation has insurance and the reason given is one it covers.",
             quote=(
-                "Otherwise, flight can be cancelled if any of the following is true:\n"
-                "- The booking was made within the last 24 hrs\n"
-                "- The flight is cancelled by airline\n"
-                "- It is a business flight\n"
                 "- The user has travel insurance and the reason for cancellation is "
                 "covered by insurance."
             ),
@@ -521,6 +531,13 @@ CANCEL = Workflow(
     ),
     rules=(
         *_IDENTIFY,
+        Rule(
+            statement=(
+                "One of the four conditions above is all that is needed. They are "
+                "alternatives -- do not look for a second one."
+            ),
+            quote="Otherwise, flight can be cancelled if any of the following is true:",
+        ),
         Rule(
             statement=(
                 "Ask why they are cancelling. It is required, and the insurance branch "

@@ -26,6 +26,15 @@ reasoning. What matters here is that the field is a list of headings copied from
 a list, not a judgment -- and that naming too few is the way it hurts, so the
 instructions push the same direction they push on `lookups`.
 
+It is also shown the policy twice: once as the document, and once as `workflows`
+-- the same rules as branches, each carrying the line it was copied from. That is
+not redundancy for its own sake. This node was not reasoning freely about policy
+and getting it wrong; it was running a procedure it already held, and the
+procedure was wrong. Of 207 plans in the last full run, 59 had a refusal for a
+goal, and 23 of those were written before the reservation that decides the
+question had ever been read. `workflows` names the fact each branch turns on, so
+a refusal has somewhere to come from other than memory.
+
 The one thing this node must not do is write down an identifier. It plans before
 the lookups have run, so it holds none, and any it produced would be invented and
 copied forward by the actor into exactly the tool call the provenance ledger
@@ -47,6 +56,7 @@ import llm
 # where it was first needed, not because it belongs to the gate.
 from agents.gate import transcript
 from core.policy import contents
+from workflows import for_policy
 
 __all__ = ["OUTPUT_RETRIES", "Plan", "brief", "build_planner", "catalogue", "render"]
 
@@ -164,6 +174,15 @@ a failure. Say so in `goal`, list the lookups that establish it, and leave
 own to give, and a handoff ends the conversation with everything else still
 undone.
 
+A refusal is a finding, and a finding needs the fact it rests on. The workflow for
+the request names what decides it -- the cabin, the purchase time, whether a
+segment has flown, whether there is insurance -- and every one of those is on a
+record you have not read yet. So the plan that establishes a refusal is a plan
+with `lookups` in it. If you have not got the fact, the honest plan is to go and
+get it, and the answer is no once it comes back and not before.
+
+{workflows}
+
 WHICH RULES APPLY
 
 `policy_sections` is the other half of your job. The assistant is not shown the
@@ -243,7 +262,10 @@ def build_planner(
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
         instructions=INSTRUCTIONS.format(
-            tools=catalogue(tools), policy=policy, contents=contents(policy)
+            tools=catalogue(tools),
+            policy=policy,
+            contents=contents(policy),
+            workflows=for_policy(policy),
         ),
         output_type=Plan,
         retries={"output": OUTPUT_RETRIES},

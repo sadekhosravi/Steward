@@ -30,6 +30,14 @@ timestamp it has to subtract for itself, agreement phrased as anything but
 "yes"), and the block examples all name a rule the API will not enforce. An
 example that only rehearses a block the gate already gets right buys nothing.
 
+The examples are not the only correction. This node is shown `workflows` as well
+as the policy -- the same rules split by the request they belong to -- because
+its commonest wrong block is a rule borrowed from a neighbouring procedure.
+Twelve of its forty-five write refusals in the last full run cited basic economy,
+which the policy forbids modifying the *flights* of and explicitly permits
+changing the *cabin* of, one line apart. The gate was reading the first as though
+it governed the section.
+
 A block is also the only thing the actor ever hears from this node. `remediation`
 is handed to it verbatim as a retry prompt and is the whole of what it has to work
 from, which makes an unactionable refusal worse than no refusal at all: it spends
@@ -53,6 +61,7 @@ from pydantic_ai.models import Model
 
 import llm
 from core.state import Demand, PendingCall, duplicated, sources, ungrounded
+from workflows import for_policy
 
 __all__ = [
     "ATTEMPTS",
@@ -193,6 +202,12 @@ mistake -- far more common than letting something through.
 - The request is unusual, awkward, or expensive. None of those are policy.
 - You are not certain. Absence of a prohibition is permission. If you cannot name
   the rule and the fact that breaks it, you do not have grounds.
+- A rule from a different request. Reservations are shared between procedures and
+  the rules are not: what forbids changing the flights on a booking says nothing
+  about changing its cabin, adding a bag to it, or cancelling it. Find the entry
+  for the request actually being made and block only on what is under it.
+
+{workflows}
 
 WORKED EXAMPLES
 
@@ -418,7 +433,7 @@ def build_gate(policy: str, model: str | Model | None = None) -> Agent[None, Ver
     """A gate bound to one domain's policy. The policy is static, the case is not."""
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
-        instructions=INSTRUCTIONS.format(policy=policy),
+        instructions=INSTRUCTIONS.format(policy=policy, workflows=for_policy(policy)),
         output_type=Verdict,
         retries={"output": OUTPUT_RETRIES},
     )

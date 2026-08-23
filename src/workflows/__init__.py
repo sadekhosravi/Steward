@@ -40,11 +40,14 @@ from core.policy import titles
 
 __all__ = [
     "CUSTOMER",
+    "PREAMBLE",
     "Fact",
     "Rule",
     "Workflow",
     "applicable",
     "flat",
+    "for_policy",
+    "render",
     "unquoted",
 ]
 
@@ -152,3 +155,99 @@ def applicable(candidates: Iterable[Workflow], policy: str) -> list[Workflow]:
             continue
         kept.append(workflow)
     return kept
+
+
+PREAMBLE = """
+HOW EACH REQUEST IS HANDLED
+
+Below is every request this policy covers, as the steps it actually takes. They
+are copied from the policy, not a summary of it, and where one contradicts what
+you would otherwise assume, these are right.
+
+Read an entry like this:
+
+- NEEDS is what has to be known before the request can be answered at all, and
+  the one place each fact comes from. A fact you have not got is a lookup to make
+  or a question to ask -- it is never something to assume, and it is never a
+  reason to refuse.
+- NEVER is what the policy forbids outright. Each one is decided by a fact from
+  NEEDS. If you do not have that fact, you have not established the block.
+- ALLOWED WHEN lists conditions of which **any single one is enough**. They are
+  alternatives, not requirements. Needing all of them would refuse almost
+  everything.
+- ALSO is what constrains the call once it is allowed.
+
+A rule appearing under one request says nothing about any other request, even
+when both touch the same reservation.
+""".strip()
+
+
+def render(workflows: Iterable[Workflow], standing: Iterable[Rule] = ()) -> str:
+    """The workflows as an agent is shown them, or "" when there are none.
+
+    The `quote` is printed under `blocks` and `permits` and nowhere else. Those
+    are the two places a decision is actually made, and where the run shows a
+    prior belief overriding the document -- so the document gets the last word in
+    its own characters. Everywhere else the statement is enough and the policy is
+    already in the same prompt, a second copy of it being the thing this module
+    is otherwise careful not to be.
+    """
+    workflows = list(workflows)
+    if not workflows:
+        return ""
+    parts = [PREAMBLE]
+    standing = list(standing)
+    if standing:
+        parts.append(
+            "\n".join(["ON EVERY REQUEST, WHATEVER IT IS", *(_quoted(r) for r in standing)])
+        )
+    parts.extend(_one(workflow) for workflow in workflows)
+    return "\n\n".join(parts)
+
+
+def _one(workflow: Workflow) -> str:
+    lines = [f"### {workflow.name}   (policy section: {workflow.section})"]
+    if workflow.facts:
+        lines.append("NEEDS")
+        lines += [f"  - {fact.name}  <-  {fact.source}" for fact in workflow.facts]
+    if workflow.blocks:
+        lines.append("NEVER")
+        lines += [_quoted(rule) for rule in workflow.blocks]
+    if workflow.permits:
+        lines.append("ALLOWED WHEN any single one of these holds")
+        lines += [_quoted(rule) for rule in workflow.permits]
+    if workflow.rules:
+        lines.append("ALSO")
+        lines += [f"  - {flat(rule.statement)}" for rule in workflow.rules]
+    return "\n".join(lines)
+
+
+def _quoted(rule: Rule) -> str:
+    """A rule that decides something, with the policy's own words under it.
+
+    The quote keeps its own line breaks. A policy that states a condition as a
+    bulleted list means the list, and flattening it onto one line is how four
+    alternatives come to read as one long conjunction.
+    """
+    lines = [flat(line) for line in rule.quote.splitlines() if line.strip()]
+    if len(lines) == 1:
+        return f"  - {flat(rule.statement)}\n      policy: {lines[0]}"
+    body = "\n".join(f"        {line}" for line in lines)
+    return f"  - {flat(rule.statement)}\n      policy:\n{body}"
+
+
+def for_policy(policy: str) -> str:
+    """The workflows this policy backs, rendered and ready to interpolate.
+
+    One place knows which domains exist, and it is this function. Returns "" for
+    a policy nothing is grounded in -- a domain we have not transcribed, or a
+    vendored policy that moved -- and the prompts are written so that an empty
+    string leaves them as they were before any of this existed.
+    """
+    from workflows import airline
+
+    kept = applicable(airline.AIRLINE, policy)
+    if not kept:
+        return ""
+    body = flat(policy)
+    return render(kept, [rule for rule in airline.STANDING if flat(rule.quote) in body])
