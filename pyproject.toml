@@ -33,7 +33,7 @@ tau2 = { git = "https://github.com/sierra-research/tau2-bench", rev = "357166111
 
 # Top-level modules under src/. Add an entry when you add a module.
 [tool.uv.build-backend]
-module-name = ["adapters", "agents", "core", "llm", "patterns", "tools", "tracing"]
+module-name = ["adapters", "agents", "core", "llm", "patterns", "tools", "tracing", "workflows"]
 
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]
