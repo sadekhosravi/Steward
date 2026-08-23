@@ -44,7 +44,13 @@ from agents.toolset import declared
 from core.policy import contents, standing
 from core.state import Deps
 
-__all__ = ["Assistant", "build_assistant", "plan_for_this_turn", "rules_for_this_turn"]
+__all__ = [
+    "Assistant",
+    "build_assistant",
+    "correction_for_this_turn",
+    "plan_for_this_turn",
+    "rules_for_this_turn",
+]
 
 Assistant = Agent[Deps, "str | DeferredToolRequests"]
 """The actor. Deps are the provenance ledger and this turn's plan."""
@@ -168,6 +174,16 @@ def plan_for_this_turn(ctx: RunContext[Deps]) -> str:
     return ctx.deps.plan if ctx.deps else ""
 
 
+def correction_for_this_turn(ctx: RunContext[Deps]) -> str:
+    """A message that was held, as the instruction to fix it.
+
+    Last of the instruction blocks, so it is the final thing the actor reads
+    before it answers. Empty on every run but the one after a hold, and empty is
+    the whole of its cost the rest of the time.
+    """
+    return ctx.deps.correction if ctx.deps else ""
+
+
 def rules_for_this_turn(ctx: RunContext[Deps]) -> str:
     """The policy sections the planner routed this turn to.
 
@@ -217,6 +233,7 @@ def build_assistant(
             *([reference] if reference else []),
             rules_for_this_turn,
             plan_for_this_turn,
+            correction_for_this_turn,
         ],
         deps_type=Deps,
         toolsets=[declared(tools)],

@@ -12,12 +12,19 @@ they run those calls against the real environment, and `resume()` feeds the
 results back in. Sub-agents added later inherit this for free: an interrupt
 resumes inside the node that raised it, however deep in the graph it sits.
 
-    plan -> think -> gate -> act -> think -> ... -> END
+    plan -> think -> gate  -> act -> think -> ... -> END
+                  -> speak                       -> END
 
 Nothing reaches `act` without passing `gate` first, and `act` emits `approved`
 rather than `calls`. That is structural on purpose: an approval that does not
 bind the thing executed is not an approval, so there is no path on which a call
 is emitted that the gate never saw.
+
+A turn has two exits and `gate` only ever guarded one of them. `speak` guards the
+other: it asks, at the moment the actor tries to hand the turn back to the
+customer, whether the writes the planner asked for have happened. It is cheap by
+construction -- when nothing is outstanding it returns without a model call, which
+is every turn of every task that needs no writes at all.
 
 `plan` sits at the entry rather than in the loop, and that placement is the whole
 of its cost control: a turn of twenty tool calls re-enters `think` twenty times
@@ -61,6 +68,7 @@ import tracing
 from agents.assistant import Assistant, build_assistant
 from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
+from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
 from core.state import Deps, PendingCall, StewardState
 
@@ -76,6 +84,13 @@ RECURSION_LIMIT = 100
 # produced four simulations that never terminated, and an unbounded correction
 # loop is the obvious way to produce more.
 REVISION_LIMIT = 2
+
+# Replies held per user turn before the actor is allowed to speak regardless.
+# Lower than the gate's budget on purpose: a held reply costs a whole assistant
+# run, and an actor that comes back with the same message after being told once
+# is telling us it has nothing else to give. One push is the intervention; two is
+# nagging, and the customer is waiting through both.
+DEFERRAL_LIMIT = 1
 
 DENIAL = "This action was not performed. {reason} {remediation}"
 
@@ -140,8 +155,15 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     try:
         plan = planner.run_sync(brief(_history(state), state.prompt)).output
     except UnexpectedModelBehavior:
-        return {"plan": "", "policy": excerpt(policy, [])}
-    return {"plan": render(plan), "policy": excerpt(policy, plan.policy_sections)}
+        return {"plan": "", "policy": excerpt(policy, []), "changes": []}
+    return {
+        "plan": render(plan),
+        "policy": excerpt(policy, plan.policy_sections),
+        # Kept as the planner wrote them, for the speaker to count against what
+        # the gate approves. A turn the planner could not answer for owes nothing,
+        # which is the fail-open answer here too: no plan, no held messages.
+        "changes": plan.changes,
+    }
 
 
 def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
@@ -160,7 +182,12 @@ def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
         # likely source of an identifier the actor is about to use, and it does not
         # reach `observed` until this node returns -- so passing the stored ledger
         # alone would reject a reservation id the customer gave a moment ago.
-        deps=Deps(observed=state.observed + seen, plan=state.plan, policy=state.policy),
+        deps=Deps(
+            observed=state.observed + seen,
+            plan=state.plan,
+            policy=state.policy,
+            correction=state.correction,
+        ),
     )
     output = run.output
     calls = (
@@ -179,6 +206,9 @@ def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
         "prompt": None,
         "tool_results": {},
         "denied": {},
+        # Consumed, like the prompt: a correction answers one attempt, and one
+        # left standing would be re-read on every request of the rest of the turn.
+        "correction": "",
         "calls": calls,
         "reply": "" if calls else output,
     }
@@ -198,7 +228,8 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     chose.
     """
     proposal = [PendingCall(**call) for call in state.calls]
-    if not any(call.name in gated for call in proposal):
+    writes = [call.name for call in proposal if call.name in gated]
+    if not writes:
         return {"approved": state.calls, "calls": []}
 
     # `decide` retries and never raises: letting a failure propagate ends the
@@ -207,7 +238,7 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     # call has been given more than one chance to come back.
     verdict = decide(gate, review(_history(state), proposal, state.observed))
     if verdict.allowed:
-        return {"approved": state.calls, "calls": []}
+        return {"approved": state.calls, "calls": [], "written": state.written + writes}
 
     message = DENIAL.format(reason=verdict.reason, remediation=verdict.remediation)
     return {
@@ -215,6 +246,41 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
         "calls": [],
         "denied": {call.id: message for call in proposal},
         "revisions": state.revisions + 1,
+    }
+
+
+def _speak(state: StewardState, speaker: Agent[None, Verdict]) -> dict[str, Any]:
+    """Let the reply go, or send the actor back to finish the turn.
+
+    The deterministic half runs first and decides whether the model is asked at
+    all. Nothing outstanding means nothing to argue about, and that is the common
+    case by a wide margin -- every turn of every task that needs no writes, and
+    every turn that has already made them. Those cost nothing here.
+
+    Fails **open**, unlike the gate beside it. The asymmetry is the same one that
+    governs `plan`, read the other way round: refusing to let the actor speak
+    withholds the turn from the customer and cannot itself produce a write, so a
+    check that did not answer must not be the reason a customer is left waiting.
+    """
+    owed = outstanding(state.changes, state.written)
+    if not owed or state.deferrals >= DEFERRAL_LIMIT:
+        return {}
+
+    # `consulted` is returned on both branches, and that is the whole reason it
+    # exists. An allowed message otherwise leaves no trace at all, which is exactly
+    # the hole the gate had: a block and a proposal that was never made looked the
+    # same from outside, and the block rate had to be recovered from Langfuse after
+    # the fact. Two counters make "how often did it fire" and "how often did it
+    # hold" separately readable while the run is still going.
+    verdict = permit(speaker, hold(_history(state), state.reply, owed))
+    if verdict.allowed:
+        return {"consulted": state.consulted + 1}
+    return {
+        "correction": HELD.format(reason=verdict.reason, remediation=verdict.remediation),
+        "reply": "",
+        "deferrals": state.deferrals + 1,
+        "consulted": state.consulted + 1,
+        "holds": state.holds + 1,
     }
 
 
@@ -260,9 +326,14 @@ def _escalate(state: StewardState, assistant: Assistant) -> dict[str, Any]:
     }
 
 
-def _route_think(state: StewardState) -> Literal["gate", "__end__"]:
-    """Tool calls go to the gate; anything else ends the turn."""
-    return "gate" if state.calls else END
+def _route_think(state: StewardState) -> Literal["gate", "speak"]:
+    """Tool calls go to the gate; a reply goes to the speaker. Both exits are guarded."""
+    return "gate" if state.calls else "speak"
+
+
+def _route_speak(state: StewardState) -> Literal["think", "__end__"]:
+    """A held reply goes back for another attempt; anything else ends the turn."""
+    return "think" if state.correction else END
 
 
 def _route_gate(state: StewardState) -> Literal["act", "think", "escalate"]:
@@ -295,6 +366,7 @@ def build_graph(
     assistant: Assistant,
     gate: Agent[None, Verdict],
     planner: Agent[None, Plan],
+    speaker: Agent[None, Verdict],
     gated: frozenset[str],
     policy: str,
 ) -> Any:
@@ -302,15 +374,21 @@ def build_graph(
     graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant)))
     graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
+    graph.add_node("speak", _traced("speak", partial(_speak, speaker=speaker)))
     graph.add_node("act", _act)
     graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
     graph.add_edge(START, "plan")
     graph.add_edge("plan", "think")
-    graph.add_conditional_edges("think", _route_think, {"gate": "gate", END: END})
+    graph.add_conditional_edges("think", _route_think, {"gate": "gate", "speak": "speak"})
     graph.add_conditional_edges(
         "gate", _route_gate, {"act": "act", "think": "think", "escalate": "escalate"}
     )
+    graph.add_conditional_edges("speak", _route_speak, {"think": "think", END: END})
     graph.add_edge("act", "think")
+    # Straight to END, bypassing `speak`. Escalation exists precisely to end a turn
+    # the gate would not let continue, so a check whose only power is to send the
+    # actor back to work has nothing to say about it -- and holding that reply
+    # would put the turn in a loop between the two things that stop it.
     graph.add_edge("escalate", END)
     return graph.compile(checkpointer=InMemorySaver())
 
@@ -337,12 +415,13 @@ class Kernel:
         model: str | Model | None = None,
         gate_model: str | Model | None = None,
         planner_model: str | Model | None = None,
+        speaker_model: str | Model | None = None,
         reference: str = "",
     ):
-        """`gate_model` and `planner_model` let the critic and the planner run on a
-        different model from the actor. Both default to the actor's, which keeps one
-        knob until there is a reason for three; resolving *which* model is a
-        caller's job, not the Kernel's.
+        """`gate_model`, `planner_model` and `speaker_model` let the two critics and
+        the planner run on a different model from the actor. All default to the
+        actor's, which keeps one knob until there is a reason for four; resolving
+        *which* model is a caller's job, not the Kernel's.
 
         `reference` is domain knowledge the policy assumes and never states. The
         Kernel does not know what is in it and does not look: deciding that is the
@@ -351,6 +430,7 @@ class Kernel:
             build_assistant(tools, policy, model, reference),
             build_gate(policy, gate_model if gate_model is not None else model),
             build_planner(tools, policy, planner_model if planner_model is not None else model),
+            build_speaker(policy, speaker_model if speaker_model is not None else model),
             _gated(tools),
             policy,
         )
@@ -360,8 +440,24 @@ class Kernel:
         return uuid4().hex
 
     def send(self, thread: str, text: str) -> Step:
-        """Deliver a user message and run until the Kernel needs something."""
-        return self._run(thread, {"prompt": text, "revisions": 0}, "message", text=text)
+        """Deliver a user message and run until the Kernel needs something.
+
+        Both budgets and both per-turn ledgers reset here, because a new message is
+        a new plan: the changes about to be written down belong to this turn, and
+        so does the record of which of them have been approved.
+        """
+        return self._run(
+            thread,
+            {
+                "prompt": text,
+                "revisions": 0,
+                "deferrals": 0,
+                "written": [],
+                "correction": "",
+            },
+            "message",
+            text=text,
+        )
 
     def resume(self, thread: str, results: dict[str, str]) -> Step:
         """Hand back the results of the calls from the last `Act` and carry on."""

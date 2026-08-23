@@ -48,6 +48,14 @@ class Deps(BaseModel):
     none -- the escalation run, which is not doing any more work and needs no
     procedure to do it by."""
 
+    correction: str = ""
+    """A held message sent back for another attempt. Empty on every normal run.
+
+    Carried as a dependency rather than as a prompt for the same reason the plan
+    is: `transcript` renders a `UserPromptPart` as "Customer:", and a correction
+    delivered that way would put words in the customer's mouth that the gate and
+    the speaker would then judge the actor against."""
+
 
 class PendingCall(BaseModel):
     """A tool call the system wants made, in the form the driver has to execute.
@@ -129,6 +137,39 @@ class StewardState(BaseModel):
     procedure that changes underneath the actor half way through a change is
     worse than the wrong one chosen up front.
     """
+
+    changes: list[str] = Field(default_factory=list)
+    """The writes the planner said this turn needs, one line each, as it wrote them.
+
+    Kept beside the rendered `plan` rather than parsed back out of it, because the
+    speaker counts these against `written` and a count taken off rendered prose is
+    a count waiting to drift."""
+
+    written: list[str] = Field(default_factory=list)
+    """Names of the gated calls the gate has approved this turn.
+
+    Approved rather than executed: what the speaker is asking is whether the actor
+    walked away from work, and a call that was approved and then failed in the
+    environment was not walked away from. Reset with the plan, since that is the
+    span the changes belong to."""
+
+    correction: str = ""
+    """A held reply, as the instruction the actor gets for its next attempt."""
+
+    deferrals: int = 0
+    """Messages held so far this user turn. Bounds the speaker's loop."""
+
+    consulted: int = 0
+    """Times the speaker has been asked to rule, over the whole conversation.
+
+    Counted, and counted separately from `holds`, because the last time a check
+    was added its failures were invisible: an allowed message and a check that
+    never ran both return nothing, and telling them apart afterwards took a
+    Langfuse archaeology session. Cumulative rather than per-turn so the totals
+    survive to the end of the conversation."""
+
+    holds: int = 0
+    """Times the speaker has sent a reply back, over the whole conversation."""
 
     observed: list[str] = Field(default_factory=list)
     """Every text the system has been shown: user messages and tool results."""
