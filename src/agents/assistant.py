@@ -31,6 +31,14 @@ calculator tool called once in the entire run), required fields left out (21%),
 and -- the largest bucket of lost tasks -- bailing out to a human rather than
 doing the work. A tau2 domain policy describes the business; it says nothing
 about how to operate, so what a policy leaves unsaid is what has to be said here.
+
+BEFORE YOU SAY NO and the workflows beside it answer a later one. Once the
+planner stopped being allowed to rule on policy, the actor started doing it
+instead: given a customer's seven reservation ids it recited the four
+cancellation conditions from memory, declared that none applied, and never called
+`get_reservation_details` once. The refusal had moved rather than gone, so the
+node that now gives it needs what the other two were already given -- the rules
+as branches, each naming the fact it turns on.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ import llm
 from agents.toolset import declared
 from core.policy import contents, standing
 from core.state import Deps
+from workflows import for_policy
 
 __all__ = [
     "Assistant",
@@ -134,6 +143,22 @@ it names, and call it again. Anything that changes the records is also reviewed
 before it runs, and a refusal tells you which rule it breaks and what to do
 instead. Do that, and propose again.
 
+BEFORE YOU SAY NO
+
+Every condition in the policy is a fact about a record: the cabin, when the
+booking was made, whether a segment has already flown, whether there is travel
+insurance. You do not know any of them until you have read the record they sit
+on. So a refusal comes after the lookup that establishes it, and never from what
+you remember the policy saying about requests like this one.
+
+Listing the conditions back to the customer is not the same as checking them. If
+you can name the rule, you can name the record it turns on -- so go and read that
+record, for every reservation the request covers, and answer afterwards.
+
+Where a rule offers more than one way through, the customer needs only one of
+them, and which one is a question about the records rather than about the
+request. Read them before you decide that none applies.
+
 TRANSFERRING TO A HUMAN
 
 A transfer ends the conversation and leaves everything unfinished. Do it only
@@ -161,6 +186,20 @@ and do not transfer.
 RULES = """
 RULES FOR THIS TURN
 {sections}
+""".strip()
+
+
+# Its own element rather than a slot in the instructions, for the same reason
+# `reference` is one: a domain nobody has transcribed a workflow for should add
+# nothing at all, not a heading with an empty space under it.
+PROCEDURES = """
+WHAT EACH REQUEST NEEDS
+
+These set out, for each thing a customer can ask for, what has to be true and
+which fact decides it. They are the policy above rearranged, not rules on top of
+it: every line quotes the sentence it was taken from.
+
+{workflows}
 """.strip()
 
 
@@ -225,11 +264,19 @@ def build_assistant(
     pydantic-ai re-evaluates a callable on every request of a run, so both stay in
     front of the actor across a whole turn of tool calls rather than only on the
     first one. Rules before plan, because the plan is a route through them.
+
+    The workflows are static and shown whole, unlike the policy sections beside
+    them. They are what BEFORE YOU SAY NO is written against, and the refusal it
+    exists to stop is one the actor reaches while holding a section the planner
+    never routed it to -- so selecting them by this turn's sections would withhold
+    them from exactly the turn that needs them.
     """
+    flows = for_policy(policy)
     return Agent(
         model=model if isinstance(model, Model) else llm.get_model(model),
         instructions=[
             INSTRUCTIONS.format(standing=standing(policy), contents=contents(policy)),
+            *([PROCEDURES.format(workflows=flows)] if flows else []),
             *([reference] if reference else []),
             rules_for_this_turn,
             plan_for_this_turn,

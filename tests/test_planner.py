@@ -91,6 +91,34 @@ def test_the_tools_and_the_policy_both_reach_the_model():
     assert POLICY in seen[0]
 
 
+def test_the_planner_is_not_asked_to_rule_on_policy():
+    """A `goal` that reads as a verdict empties `changes`, and an empty `changes` is
+    nothing for the speaker to count -- which is how most of the gold writes in the
+    diagnostic run were lost before the gate ever saw a proposal."""
+    seen: list[str] = []
+    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
+
+    told = seen[0]
+
+    assert "WHETHER IT IS ALLOWED IS NOT YOURS TO DECIDE" in told
+    assert "WHEN THE ANSWER IS NO" not in told
+
+
+def test_the_planner_is_told_something_else_does_the_refusing():
+    """It stops writing verdicts only if it knows a reviewer is there to write them."""
+    seen: list[str] = []
+    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
+
+    assert "checked against this policy before it runs" in seen[0]
+
+
+def test_the_goal_is_the_shape_of_the_records_not_a_ruling():
+    """The field description is the only place the model is told what `goal` is for."""
+    described = Plan.model_fields["goal"].description or ""
+
+    assert "never a verdict" in described
+
+
 def test_the_planner_is_given_no_tools_to_call():
     """It plans; a call from here would reach the environment with nothing between."""
     planner = build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_plans({"goal": "ok"})))
@@ -144,10 +172,10 @@ def test_a_full_plan_renders_every_section_in_order():
 def test_a_plan_that_changes_nothing_shows_no_change_section():
     """An empty heading reads as an instruction to find something to put under it, and
     doing nothing is the correct answer to half the tasks in this benchmark."""
-    text = render(Plan(goal="The policy does not allow this.", lookups=["Check the fare class."]))
+    text = render(Plan(goal="The fare class is known.", lookups=["Check the fare class."]))
     assert "Then change" not in text
     assert "Confirm before" not in text
-    assert "The policy does not allow this." in text
+    assert "The fare class is known." in text
 
 
 def test_the_plan_tells_the_actor_it_may_deviate():

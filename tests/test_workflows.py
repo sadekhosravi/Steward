@@ -18,11 +18,13 @@ import pathlib
 
 import pytest
 from dotenv import find_dotenv, load_dotenv
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from agents.assistant import build_assistant
 from agents.gate import build_gate
 from agents.planner import build_planner
+from core.state import Deps
 from tests.tools import CANCEL as CANCEL_TOOL
 from tests.tools import PLANNER
 from workflows import CUSTOMER, Fact, Rule, Workflow, applicable, flat, for_policy, render, unquoted
@@ -296,20 +298,28 @@ def test_the_rendering_says_basic_economy_does_not_block_a_cabin_change():
 # --- and where they end up ---------------------------------------------------
 
 
-def instructions_of(agent) -> str:
+def instructions_of(agent, deps: Deps | None = None) -> str:
     """What an agent is told, taken from the request rather than from the agent.
 
     Instructions arrive on the `ModelRequest` itself, which is the same seam
     `test_policy` reads them through.
+
+    `deps` only for the actor: its instructions are partly callables over a
+    dependency object, and the other three agents take none at all.
     """
     seen: list[str] = []
 
     def record(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         seen.extend(m.instructions for m in messages if getattr(m, "instructions", None))
+        # The actor may answer in prose; the planner and the critics may not. Both
+        # shapes have to be satisfiable here, because what is being read is the
+        # request rather than whatever comes back.
+        if not info.output_tools:
+            return ModelResponse(parts=[TextPart("ok")])
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, _blank(info))])
 
     with agent.override(model=FunctionModel(record)):
-        agent.run_sync("anything")
+        agent.run_sync("anything", **({"deps": deps} if deps is not None else {}))
     return "\n".join(seen)
 
 
@@ -339,7 +349,32 @@ def test_the_gate_is_shown_the_workflows():
     assert "all reservations, including basic economy, can change cabin" in told
 
 
-def test_a_policy_with_no_workflows_still_builds_both_agents():
+@needs_data
+def test_the_actor_is_shown_the_workflows():
+    """The node that ends up giving the refusal, and the last one to be given them."""
+    actor = build_assistant([CANCEL_TOOL], airline_policy(), PLANNER)
+
+    told = instructions_of(actor)
+
+    assert "### Cancel a reservation" in told
+    assert "ALLOWED WHEN any single one of these holds" in told
+
+
+@needs_data
+def test_the_actor_is_told_a_refusal_waits_for_the_record():
+    """It refused seven reservations it had never read, from the conditions alone."""
+    told = instructions_of(build_assistant([CANCEL_TOOL], airline_policy(), PLANNER))
+
+    assert "BEFORE YOU SAY NO" in told
+    assert "Listing the conditions back to the customer is not the same as checking them" in told
+
+
+def test_a_policy_with_no_workflows_still_builds_every_agent():
     """The interpolation has to survive a domain nothing was transcribed for."""
     assert "### " not in instructions_of(build_planner([CANCEL_TOOL], POLICY, PLANNER))
     assert "### " not in instructions_of(build_gate(POLICY, PLANNER))
+    told = instructions_of(build_assistant([CANCEL_TOOL], POLICY, PLANNER))
+    assert "### " not in told
+    # The heading goes with them. An empty one reads as an instruction to find
+    # something to put under it, which is the whole reason this is its own block.
+    assert "WHAT EACH REQUEST NEEDS" not in told

@@ -35,6 +35,15 @@ goal, and 23 of those were written before the reservation that decides the
 question had ever been read. `workflows` names the fact each branch turns on, so
 a refusal has somewhere to come from other than memory.
 
+That was not enough on its own, because the refusal was never this node's to
+give. A `goal` that reads as a verdict empties `changes`, an empty `changes` is
+nothing for the speaker to count, and the turn ends in talk with neither guard
+having fired -- which is how 24 of the 43 gold writes in the diagnostic run were
+lost before the gate ever saw a proposal. So `goal` is now the shape of the
+records and nothing else, and the instructions say plainly that the gate is the
+thing that refuses. The cost of planning a change the policy forbids is one
+refusal the assistant can explain; the cost of planning none is the request.
+
 The one thing this node must not do is write down an identifier. It plans before
 the lookups have run, so it holds none, and any it produced would be invented and
 copied forward by the actor into exactly the tool call the provenance ledger
@@ -67,8 +76,8 @@ class Plan(BaseModel):
     goal: str = Field(
         description=(
             "What the customer wants, in one sentence, as the records would have to "
-            "end up for it to be true. If the policy does not permit it, say that "
-            "here instead."
+            "end up for it to be true. Always that shape, and never a verdict: "
+            "whether the policy permits it is settled elsewhere."
         )
     )
     lookups: list[str] = Field(
@@ -166,20 +175,30 @@ never started, because the records end up in a state nobody asked for. If the
 request needs no change at all -- a question, a lookup, something the policy does
 not allow -- leave it empty.
 
-WHEN THE ANSWER IS NO
+WHETHER IT IS ALLOWED IS NOT YOURS TO DECIDE
 
-If the policy does not permit what is being asked, that is a finished plan and not
-a failure. Say so in `goal`, list the lookups that establish it, and leave
-`changes` empty. Do not plan a handoff to a human: a refusal is the assistant's
-own to give, and a handoff ends the conversation with everything else still
-undone.
+Every change is checked against this policy before it runs, by a reviewer holding
+the same rules and workflows you are holding, plus the results of the lookups you
+asked for. That reviewer is where a request gets refused. You are not it, and you
+are asked before the lookups have run -- the worst-informed moment in the whole
+turn to be settling a policy question.
 
-A refusal is a finding, and a finding needs the fact it rests on. The workflow for
-the request names what decides it -- the cabin, the purchase time, whether a
-segment has flown, whether there is insurance -- and every one of those is on a
-record you have not read yet. So the plan that establishes a refusal is a plan
-with `lookups` in it. If you have not got the fact, the honest plan is to go and
-get it, and the answer is no once it comes back and not before.
+So `goal` says how the records would have to end up, always. It is not the place
+for a verdict. The conditions a workflow turns on -- the cabin, the purchase time,
+whether a segment has flown, whether there is insurance -- are things to find out:
+put each one in `lookups` and plan the change the request needs.
+
+Planning a change that turns out not to be allowed costs one refusal, and the
+assistant is told which rule it broke and can explain it to the customer.
+Planning no change at all costs the request outright: nothing is proposed, nothing
+is reviewed, and the customer is told no by an assistant that never checked.
+
+Where a workflow offers more than one way in, plan the one the facts support. A
+route closed under one condition is often open under another, and finding that is
+your job and not the reviewer's -- it only ever answers the move it is shown.
+
+Do not plan a handoff to a human either: a refusal is the assistant's own to give,
+and a handoff ends the conversation with everything else still undone.
 
 {workflows}
 
