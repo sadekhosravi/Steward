@@ -40,7 +40,7 @@ from agents.gate import (
     transcript,
 )
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
-from core.state import Demand, PendingCall, mispriced
+from core.state import Change, Demand, PendingCall, mispriced
 from tests.tools import CANCEL, LOOKUP, PLANNER
 
 SEEN_ID = "HKD3PS"
@@ -642,7 +642,7 @@ def test_the_first_review_of_a_conversation_has_nothing_to_report():
 # --- what the turn still owes ------------------------------------------------
 
 
-OWED = "Cancel the reservation with cancel_reservation."
+OWED = Change(tool="cancel_reservation", record="HKD3PS", what="cancel the reservation")
 
 
 def _case(owed: list[str] | None) -> str:
@@ -653,7 +653,7 @@ def test_the_gate_is_shown_what_the_turn_still_owes():
     """The run had the plan, the ledger and the speaker all correct and lost the
     task anyway: the handoff leaves through the gate, and the gate could see none
     of it."""
-    assert OWED in _case([OWED])
+    assert "cancel_reservation on HKD3PS: cancel the reservation" in _case([OWED])
 
 
 def test_a_turn_owing_nothing_says_so_rather_than_showing_a_blank():
@@ -681,7 +681,7 @@ def test_the_kernel_hands_the_gate_the_ledger_the_speaker_counts():
 
     k.send("t", f"cancel {SEEN_ID}")
 
-    assert "Cancel it with cancel_reservation." in cases[0]
+    assert f"cancel_reservation on {SEEN_ID}: cancel it" in cases[0]
 
 
 def _plans_a_cancellation(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -691,7 +691,13 @@ def _plans_a_cancellation(messages: list[ModelMessage], info: AgentInfo) -> Mode
                 info.output_tools[0].name,
                 {
                     "goal": "The reservation is cancelled.",
-                    "changes": ["Cancel it with cancel_reservation."],
+                    "changes": [
+                        {
+                            "tool": "cancel_reservation",
+                            "record": SEEN_ID,
+                            "what": "cancel it",
+                        }
+                    ],
                 },
             )
         ]

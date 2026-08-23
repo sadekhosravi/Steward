@@ -20,6 +20,7 @@ from pydantic_ai.tools import ToolDefinition
 from agents.gate import transcript
 from agents.planner import Plan, brief, build_planner, catalogue, render
 from core.kernel import REPLAN_LIMIT, Act, Kernel, Say
+from core.state import Change
 from tests.tools import CANCEL, LOOKUP
 
 POLICY = "Cancellations within 24 hours are free."
@@ -161,12 +162,12 @@ def test_a_full_plan_renders_every_section_in_order():
             goal="The reservation is cancelled.",
             lookups=["Find the reservation with get_reservation."],
             confirm="The 50 dollar penalty.",
-            changes=["Cancel it with cancel_reservation."],
+            changes=[Change(tool="cancel_reservation", record="HKD3PS", what="cancel it")],
         )
     )
     assert text.index("Find out first") < text.index("Confirm before") < text.index("Then change")
     assert "  1. Find the reservation with get_reservation." in text
-    assert "  1. Cancel it with cancel_reservation." in text
+    assert "  1. cancel_reservation on HKD3PS: cancel it" in text
 
 
 def test_a_plan_that_changes_nothing_shows_no_change_section():
@@ -362,7 +363,7 @@ def test_a_re_plan_cannot_drop_a_change_the_turn_still_owes():
     """The failure this guards. `outstanding` counts `changes` against what the gate
     approved, so a planner that decides mid-turn the job is done would empty the
     list and switch the speaker off for the rest of the turn."""
-    owed = ["Cancel it with cancel_reservation."]
+    owed = [{"tool": "cancel_reservation", "record": "HKD3PS", "what": "cancel it"}]
 
     values = _state_after_one_lookup(
         FunctionModel(
@@ -370,20 +371,20 @@ def test_a_re_plan_cannot_drop_a_change_the_turn_still_owes():
         )
     )
 
-    assert values["changes"] == owed
+    assert [c.tool for c in values["changes"]] == ["cancel_reservation"]
 
 
 def test_a_re_plan_adds_a_change_it_has_only_now_realised_is_needed():
     values = _state_after_one_lookup(
         FunctionModel(
             _plans_in_turn(
-                {"goal": GOAL, "changes": ["Cancel it."]},
-                {"goal": GOAL, "changes": ["Refund it."]},
+                {"goal": GOAL, "changes": [{"tool": "cancel_reservation", "what": "cancel it"}]},
+                {"goal": GOAL, "changes": [{"tool": "send_certificate", "what": "refund it"}]},
             )
         )
     )
 
-    assert values["changes"] == ["Cancel it.", "Refund it."]
+    assert [c.tool for c in values["changes"]] == ["cancel_reservation", "send_certificate"]
 
 
 def test_a_re_plan_cannot_take_away_a_policy_section_the_actor_is_working_from():

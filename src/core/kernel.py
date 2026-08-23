@@ -90,7 +90,7 @@ from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
-from core.state import Demand, Deps, PendingCall, StewardState, pruned
+from core.state import Change, Demand, Deps, PendingCall, StewardState, Written, pruned
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -212,14 +212,18 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # the case most likely to be asked again on the very next round trip, and a
     # budget only charged for successes would not bound it at all.
     spent = state.replans if opening else state.replans + 1
+    owed = outstanding(state.changes, state.written)
     try:
         plan = planner.run_sync(
-            brief(_history(state), state.prompt, state.tool_results, state.written)
+            brief(_history(state), state.prompt, state.tool_results, state.written, owed)
         ).output
     except UnexpectedModelBehavior:
         if not opening:
             return {"replans": spent}
-        return {"plan": "", "policy": excerpt(policy, []), "changes": []}
+        # The commitments stand. A planner that could not answer has said nothing
+        # about them, and dropping what this conversation already owes because one
+        # model call failed is the very thing this ledger is here to prevent.
+        return {"plan": "", "policy": excerpt(policy, []), "changes": owed}
     # A re-plan may add to what the turn is working from and may not take away.
     # The objection to moving a plan mid-turn was always that the actor loses the
     # rule it was halfway through applying, and widening rather than replacing is
@@ -231,17 +235,28 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
         "plan": render(plan),
         "policy": excerpt(policy, sections),
         "sections": sections,
-        # Kept as the planner wrote them, for the speaker to count against what
-        # the gate approves. A turn the planner could not answer for owes nothing,
-        # which is the fail-open answer here too: no plan, no held messages.
-        "changes": plan.changes if opening else _widen(state.changes, plan.changes),
+        # Widened on *both* branches, which is the change the multi-record failure
+        # turned on. `sections` above still resets when the customer speaks,
+        # because which rules apply is a question about this turn. What is owed is
+        # not: it belongs to the request, and the request outlives the turn. A
+        # commitment carried here leaves only by being carried out -- see
+        # `StewardState.changes`.
+        "changes": _widen(state.changes, plan.changes),
         "replans": spent,
     }
 
 
-def _widen(kept: list[str], added: list[str]) -> list[str]:
-    """Both lists, in order, without repeats."""
-    return list(dict.fromkeys([*kept, *added]))
+def _widen(kept: list[Any], added: list[Any]) -> list[Any]:
+    """Both lists, in order, without repeats.
+
+    Keyed on the item for plain strings and on `.key` for a `Change`, so a
+    commitment the planner re-lists in slightly different words is recognised as
+    the one already held rather than added beside it.
+    """
+    seen: dict[Any, Any] = {}
+    for item in [*kept, *added]:
+        seen.setdefault(item.key if isinstance(item, Change) else item, item)
+    return list(seen.values())
 
 
 def _think(
@@ -344,7 +359,13 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
         return {
             "approved": state.calls,
             "calls": [],
-            "written": state.written + writes,
+            # Recorded with the identifiers it named, not just its tool. Which of
+            # them is "the" record is a question about a domain and `core` has
+            # none, so the ledger keeps all of them and lets the plan's own record
+            # decide the match -- see `outstanding`. Gated calls only: a lookup
+            # that happened to share a step with a write discharges nothing.
+            "written": state.written
+            + [Written.of(c.name, c.arguments) for c in proposal if c.name in gated],
             "fixable": "",
         }
 
@@ -603,11 +624,18 @@ class Kernel:
     def send(self, thread: str, text: str) -> Step:
         """Deliver a user message and run until the Kernel needs something.
 
-        Every budget and both per-turn ledgers reset here, because a new message is
-        a new plan: the changes about to be written down belong to this turn, and
-        so does the record of which of them have been approved. `sections` resets
-        with them -- widening is a rule about one turn's plans, not a reason for a
-        turn to inherit the last one's rules.
+        Every budget resets here, because a new message is a new turn's worth of
+        allowance. `sections` resets with them: widening is a rule about one turn's
+        plans, not a reason for a turn to inherit the last one's rules.
+
+        The two write ledgers do not reset, and that is the point of them. What a
+        request needs changed, and what has been changed towards it, are facts
+        about the request rather than about the turn -- and a request routinely
+        outlives several turns, because the policy makes the assistant stop and ask
+        the customer to agree before it may touch anything. Resetting here is what
+        made the confirmation the customer was asked for the moment the plan was
+        thrown away: across four runs, no task requiring writes to more than one
+        record was ever completed.
         """
         return self._run(
             thread,
@@ -616,7 +644,6 @@ class Kernel:
                 "revisions": 0,
                 "deferrals": 0,
                 "replans": 0,
-                "written": [],
                 "sections": [],
                 "correction": "",
                 "fixable": "",

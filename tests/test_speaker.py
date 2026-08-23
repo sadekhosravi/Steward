@@ -24,10 +24,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.speaker import NOTHING_OWED, UNCHECKED, hold, outstanding
 from core.kernel import DEFERRAL_LIMIT, Act, Kernel, Say
+from core.state import Change, Written
 from tests.tools import CANCEL, LOOKUP
 
 SEEN_ID = "HKD3PS"
-CHANGE = "cancel_reservation to cancel the booking"
+CHANGE = Change(tool="cancel_reservation", record=SEEN_ID, what="cancel the booking")
 
 
 # --- scripted models --------------------------------------------------------
@@ -37,11 +38,15 @@ def _output(info: AgentInfo, **payload: object) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, payload)])
 
 
-def planning(*changes: str):
+def planning(*changes: Change):
     """A planner that names these changes and nothing else."""
 
     def planner(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        return _output(info, goal="Do what they asked.", changes=list(changes))
+        return _output(
+            info,
+            goal="Do what they asked.",
+            changes=[c.model_dump() for c in changes],
+        )
 
     return planner
 
@@ -145,30 +150,51 @@ def test_a_turn_that_plans_no_changes_owes_nothing():
     assert outstanding([], []) == []
 
 
-def test_a_change_whose_tool_was_approved_is_done():
-    assert outstanding([CHANGE], ["cancel_reservation"]) == []
+def test_a_change_whose_tool_and_record_were_approved_is_done():
+    assert outstanding([CHANGE], [Written(tool="cancel_reservation", records=[SEEN_ID])]) == []
 
 
 def test_a_change_whose_tool_was_never_approved_is_outstanding():
-    assert outstanding([CHANGE], ["update_reservation_baggages"]) == [CHANGE]
+    assert outstanding([CHANGE], [Written(tool="update_reservation_baggages")]) == [CHANGE]
+
+
+def test_the_same_tool_on_another_record_does_not_discharge_it():
+    """The defect this function existed to have and did not. A request covering
+    six reservations was satisfied, as far as the old substring test could tell,
+    by writing to one of them -- and across four runs no task needing writes to
+    more than one record was ever completed."""
+    approved = [Written(tool="cancel_reservation", records=["4WQ150"])]
+    assert outstanding([CHANGE], approved) == [CHANGE]
+
+
+def test_each_record_is_discharged_by_its_own_call():
+    changes = [
+        Change(tool="cancel_reservation", record="AAA111", what="cancel it"),
+        Change(tool="cancel_reservation", record="BBB222", what="cancel it"),
+        Change(tool="cancel_reservation", record="CCC333", what="cancel it"),
+    ]
+    approved = [Written(tool="cancel_reservation", records=["AAA111"])]
+    assert outstanding(changes, approved) == changes[1:]
 
 
 def test_only_the_unmet_changes_are_outstanding():
     """A task needing three writes is not finished by one, and the speaker is told
     which two are left rather than that something is missing."""
     changes = [
-        "update_reservation_baggages to add a bag",
-        "update_reservation_passengers to change the passenger",
-        "update_reservation_flights to upgrade the cabin",
+        Change(tool="update_reservation_baggages", record=SEEN_ID, what="add a bag"),
+        Change(tool="update_reservation_passengers", record=SEEN_ID, what="change who flies"),
+        Change(tool="update_reservation_flights", record=SEEN_ID, what="upgrade the cabin"),
     ]
-    assert outstanding(changes, ["update_reservation_baggages"]) == changes[1:]
+    approved = [Written(tool="update_reservation_baggages", records=[SEEN_ID])]
+    assert outstanding(changes, approved) == changes[1:]
 
 
-def test_a_change_naming_no_tool_stays_outstanding():
-    """The planner is told to name the tool on every line. When it does not, the
-    line cannot be matched -- and the cost of asking about a finished turn is one
-    model call, where the cost of missing an unfinished one is the task."""
-    assert outstanding(["cancel their booking"], ["cancel_reservation"]) == ["cancel their booking"]
+def test_a_change_with_no_record_falls_back_to_the_tool_alone():
+    """A booking creates the record it is about, so there is nothing to match on.
+    The tool name is the only answer available, and it is the old behaviour."""
+    booking = Change(tool="book_reservation", what="book the new trip")
+    assert outstanding([booking], [Written(tool="book_reservation", records=["NEW999"])]) == []
+    assert outstanding([booking], [Written(tool="cancel_reservation")]) == [booking]
 
 
 def test_the_case_says_plainly_when_nothing_is_owed():
@@ -437,3 +463,102 @@ def test_an_approved_action_clears_a_fix_left_over_from_an_earlier_refusal():
     state = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
     assert state["fixable"] == ""
     assert state.get("holds", 0) == 0
+
+
+# --- the ledger across a customer turn ---------------------------------------
+
+
+def _forgets_after_the_first_turn():
+    """A planner that names both records once and then, on the customer's next
+    message, re-plans as though only the record it just read were in scope.
+
+    Not a strawman: this is task 18 out of the last full run, where `changes`
+    went from "update_reservation_flights (once per reservation to change cabin
+    to economy)" to `["update_reservation_flights"]` between two consecutive
+    plans, with nothing in between but the customer saying yes.
+    """
+    seen: list[int] = []
+
+    def planner(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(1)
+        both = [
+            Change(tool="cancel_reservation", record="AAA111", what="cancel it").model_dump(),
+            Change(tool="cancel_reservation", record="BBB222", what="cancel it").model_dump(),
+        ]
+        return _output(
+            info,
+            goal="Both bookings are cancelled.",
+            changes=both if len(seen) == 1 else both[:1],
+        )
+
+    return planner
+
+
+def test_a_commitment_survives_the_customer_speaking_again():
+    """The defect Part 2 exists for. The plan is rewritten from scratch every time
+    the customer speaks, so a request covering two records became a request
+    covering one -- and the second was owed by nobody for the rest of the task."""
+    k = kernel(just_talks, allows, _forgets_after_the_first_turn())
+
+    k.send("t", "cancel both my bookings")
+    k.send("t", "yes please, go ahead")
+
+    values = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert [c.record for c in values["changes"]] == ["AAA111", "BBB222"]
+
+
+def test_an_approved_write_is_still_remembered_next_turn():
+    """The other half. A ledger of what is owed is worth nothing beside a ledger
+    of what is done that resets underneath it -- the second turn would re-owe the
+    write the first one had already made."""
+    k = kernel(cancels_then_talks, allows, planning(CHANGE))
+
+    step = k.send("t", f"cancel {SEEN_ID}")
+    assert isinstance(step, Act)
+    k.resume("t", {step.calls[0].id: "cancelled"})
+    k.send("t", "thanks")
+
+    values = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert [w.tool for w in values["written"]] == ["cancel_reservation"]
+    assert outstanding(values["changes"], values["written"]) == []
+
+
+def test_a_record_named_in_prose_is_still_matched():
+    """Told to name the record, the planner does not always hand back a bare id:
+    across five samples it answered `JG7FMM`, `@JG7FMM_reservation_id` and "the
+    reservation id from get_reservation_details for JG7FMM". All three name the
+    same record, and an exact match would have discharged none of them."""
+    approved = [Written(tool="cancel_reservation", records=["JG7FMM"])]
+    for spelling in (
+        "JG7FMM",
+        "@JG7FMM_reservation_id",
+        "the reservation id from get_reservation_details for JG7FMM",
+    ):
+        change = Change(tool="cancel_reservation", record=spelling, what="cancel it")
+        assert outstanding([change], approved) == []
+
+
+def test_a_record_named_in_prose_does_not_match_a_different_one():
+    approved = [Written(tool="cancel_reservation", records=["4WQ150"])]
+    change = Change(tool="cancel_reservation", record="@JG7FMM_reservation_id", what="cancel it")
+    assert outstanding([change], approved) == [change]
+
+
+def test_a_commitment_the_customer_never_withdrew_cannot_wedge_the_turn():
+    """The risk carrying the ledger introduces. A change nobody retires stays
+    outstanding for the rest of the conversation, so the bound on what that can
+    cost has to be the deferral budget and nothing else: one hold per turn, then
+    the message goes."""
+    speaker, consulted = counted(always_holds)
+    k = kernel(just_talks, speaker, planning(CHANGE))
+
+    for _ in range(3):
+        step = k.send("t", f"cancel {SEEN_ID}")
+        # Every turn still ends by talking to the customer. The commitment is
+        # carried, not enforced.
+        assert isinstance(step, Say)
+
+    # One consult per turn and no more: the second attempt is over the deferral
+    # budget and leaves without asking. So an unretired commitment costs one model
+    # call a turn, for as long as it stands, and can never stop the conversation.
+    assert len(consulted) == 3 * DEFERRAL_LIMIT

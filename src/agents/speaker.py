@@ -60,6 +60,7 @@ from pydantic_ai.models import Model
 
 import llm
 from agents.gate import UNAVAILABLE, Verdict, decide, transcript
+from core.state import Change, Written
 
 __all__ = [
     "HELD",
@@ -221,26 +222,49 @@ UNCHECKED = Verdict(
 )
 
 
-def outstanding(changes: list[str], written: list[str]) -> list[str]:
+def outstanding(changes: list[Change], written: list[Written]) -> list[Change]:
     """Planned changes that no approved call has covered yet.
 
     The deterministic half, and the part that decides whether the model is asked
-    at all. A change line is considered done when it names a tool the gate has
-    approved this turn -- the planner is told to name the tool on every line, so
-    this is a substring test against text it was instructed to include.
+    at all. A change is done when the gate has approved a call to its tool that
+    named its record.
 
-    A line naming no approved tool stays outstanding, including a line that names
-    no tool at all. That direction is deliberate: the cost of asking about a turn
-    that was actually finished is one model call, and the cost of missing one is
-    the task.
+    Both halves of that matter. This used to ask only whether the tool's name
+    appeared somewhere in the change line, which meant one approved call
+    discharged every change that mentioned the same tool -- so a request covering
+    six reservations was satisfied, as far as this function could tell, by writing
+    to one of them. Matching the record is what makes the sixth still owed while
+    the first is done.
+
+    A change whose record the plan never knew falls back to the tool alone, which
+    is the old behaviour and the only answer available: there is nothing to match
+    on. The bias stays where it was -- a change that cannot be shown to have
+    happened stays outstanding, because the cost of asking about a turn that was
+    actually finished is one model call, and the cost of missing one is the task.
     """
-    return [line for line in changes if not any(name in line for name in written)]
+    return [change for change in changes if not any(_covers(done, change) for done in written)]
 
 
-def hold(messages: list[ModelMessage], reply: str, owed: list[str]) -> str:
+def _covers(done: Written, change: Change) -> bool:
+    """Whether one approved call carries out one planned change."""
+    if done.tool != change.tool:
+        return False
+    if change.record is None:
+        return True
+    # `in` rather than `==` because the planner does not always hand back a bare
+    # identifier. Told to name the record, a fifth of the time it answers "the
+    # reservation id from get_reservation_details for JG7FMM" -- the right record,
+    # wrapped in where it came from. Containment reads that correctly and cannot
+    # confuse two ids of the same length for each other.
+    return any(record in change.record for record in done.records)
+
+
+def hold(messages: list[ModelMessage], reply: str, owed: list[Change]) -> str:
     """The case put to the speaker: what happened, what is owed, what it wants to say."""
     return HOLD.format(
         transcript=transcript(messages) or "(nothing yet)",
-        outstanding="\n".join(f"- {line}" for line in owed) if owed else NOTHING_OWED,
+        outstanding="\n".join(f"- {change.key}: {change.what}".rstrip(": ") for change in owed)
+        if owed
+        else NOTHING_OWED,
         reply=reply,
     )

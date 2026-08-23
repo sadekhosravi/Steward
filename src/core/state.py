@@ -27,11 +27,13 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "Change",
     "Demand",
     "Deps",
     "StewardState",
     "Obligation",
     "PendingCall",
+    "Written",
     "duplicated",
     "invented",
     "mispriced",
@@ -124,6 +126,69 @@ class Obligation(BaseModel):
     """Literal text the reply must carry. `None` means no reply can clear it."""
 
 
+class Change(BaseModel):
+    """One write the request needs, and the record it has to land on.
+
+    Structured rather than prose because the speaker has to decide whether it has
+    happened, and against prose it could only ask whether the tool's *name*
+    appeared in an approved call. Where a request touches several records that is
+    the wrong question by construction: "update_reservation_flights (once per
+    reservation)" is a line one call satisfies and six calls' worth of work, and
+    the run discharged it on the first every time.
+    """
+
+    # Described through `Field` rather than as attribute docstrings, because
+    # pydantic only carries the latter into a JSON Schema when
+    # `use_attribute_docstrings` is set -- so the planner was being handed three
+    # unlabelled fields and filling in the two whose names spoke for themselves.
+    tool: str = Field(description="The tool that makes this change.")
+
+    record: str | None = Field(
+        default=None,
+        description=(
+            "The identifier this change lands on -- the reservation, the order, the "
+            "line. Fill it in whenever a lookup has already returned it. Null only "
+            "when nothing has been looked up yet, or when the write creates the "
+            "record it is about. Never guess one."
+        ),
+    )
+
+    what: str = Field(
+        default="",
+        description=(
+            "What this call has to change about that record, in a few words. The "
+            "assistant reads it as its instruction, so write it as one. Do not put "
+            "the identifier here -- it belongs in `record`, and an identifier "
+            "written only here leaves this change indistinguishable from every "
+            "other change to the same tool."
+        ),
+    )
+
+    @property
+    def key(self) -> str:
+        """What discharges this, as a line the planner can be shown."""
+        return f"{self.tool} on {self.record}" if self.record else self.tool
+
+
+class Written(BaseModel):
+    """A gated call the gate approved, as the ledger remembers it.
+
+    Approved rather than executed: what the speaker is asking is whether the actor
+    walked away from work, and a call that was approved and then failed in the
+    environment was not walked away from.
+    """
+
+    tool: str
+    records: list[str] = Field(default_factory=list)
+    """Every identifier the call named. Which of them is "the" record is a
+    question about a domain, and `core` does not have one -- so the ledger keeps
+    them all and lets the plan's own record decide the match."""
+
+    @classmethod
+    def of(cls, name: str, arguments: dict[str, Any]) -> Written:
+        return cls(tool=name, records=[value for _, value in _identifiers(arguments)])
+
+
 class StewardState(BaseModel):
     """The graph schema, and the only place conversation state lives.
 
@@ -196,20 +261,26 @@ class StewardState(BaseModel):
     replans: int = 0
     """Mid-turn plans written so far. Bounds the cost of asking again."""
 
-    changes: list[str] = Field(default_factory=list)
-    """The writes the planner said this turn needs, one line each, as it wrote them.
+    changes: list[Change] = Field(default_factory=list)
+    """The writes the request needs, as the planner has described them so far.
 
     Kept beside the rendered `plan` rather than parsed back out of it, because the
     speaker counts these against `written` and a count taken off rendered prose is
-    a count waiting to drift."""
+    a count waiting to drift.
 
-    written: list[str] = Field(default_factory=list)
-    """Names of the gated calls the gate has approved this turn.
+    Not reset when the customer speaks again. It used to be, and that is the
+    single defect the run turned on: a request covering six reservations was
+    planned once, correctly, and then re-planned from scratch the moment the
+    customer replied -- so the five reservations still owed stopped being owed by
+    anybody. Across four runs, tasks needing writes on more than one record were
+    completed zero times out of three. A commitment now leaves this list one way
+    only, by being carried out."""
 
-    Approved rather than executed: what the speaker is asking is whether the actor
-    walked away from work, and a call that was approved and then failed in the
-    environment was not walked away from. Reset with the plan, since that is the
-    span the changes belong to."""
+    written: list[Written] = Field(default_factory=list)
+    """The gated calls the gate has approved, for as long as the conversation
+    lasts. Carried across user turns with `changes`, for the same reason: a ledger
+    of what is owed is worth nothing beside a ledger of what is done that resets
+    underneath it."""
 
     correction: str = ""
     """A held reply, as the instruction the actor gets for its next attempt."""

@@ -65,6 +65,7 @@ import llm
 # where it was first needed, not because it belongs to the gate.
 from agents.gate import transcript
 from core.policy import contents
+from core.state import Change, Written
 from workflows import for_policy
 
 __all__ = ["OUTPUT_RETRIES", "Plan", "brief", "build_planner", "catalogue", "render"]
@@ -100,11 +101,15 @@ class Plan(BaseModel):
             "nothing will be changed."
         ),
     )
-    changes: list[str] = Field(
+    changes: list[Change] = Field(
         default_factory=list,
         description=(
-            "Every write the request needs, in the order they must happen, one line "
-            "each, naming the tool. Empty when the request needs none."
+            "Every write the request needs, in the order they must happen. One entry "
+            "per call that will have to be made -- if the request covers four "
+            "reservations, that is four entries naming four records, never one entry "
+            "saying 'for each reservation'. Set `record` to the identifier the write "
+            "lands on whenever you know it, and leave it null only for a write that "
+            "creates the record it is about. Empty when the request needs no writes."
         ),
     )
     policy_sections: list[str] = Field(
@@ -151,11 +156,17 @@ itineraries, is two reads and a subtraction, and it is never something to ask th
 customer for -- they do not know it, and the one number they must agree to is the
 one thing you cannot take their word for.
 
-You do not have any identifiers and you must not write one down. You are planning
-before the lookups have run, so no reservation id, order id, payment id or flight
-number is known to you yet. Name one by where it will come from -- "the
-reservation id from get_user_details" -- never by a value. Any value you write
-here is one you made up, and the assistant may copy it into a real call.
+Never invent an identifier. The first time you plan a turn, no reservation id,
+order id, payment id or flight number is known to you at all -- name one by where
+it will come from, "the reservation id from get_user_details", never by a value.
+Any value you write down that a lookup has not returned is one you made up, and
+the assistant may copy it into a real call.
+
+You are asked again every time a lookup comes back, and by then some of those
+identifiers are real. WHAT JUST CAME BACK holds them. Copying one from there is
+not inventing it, and it is what makes `record` on a change worth having: after
+get_user_details has listed four reservations, the plan can and should name all
+four.
 
 AGREEING
 
@@ -169,11 +180,35 @@ the change being made. If the plan changes nothing, `confirm` is null.
 
 CHANGING
 
-`changes` is every write the request needs, in the order they have to happen, one
-line each, naming the tool. All of them. A change left half-done is worse than one
-never started, because the records end up in a state nobody asked for. If the
-request needs no change at all -- a question, a lookup, something the policy does
-not allow -- leave it empty.
+`changes` is every write the request needs, in the order they have to happen. All
+of them. A change left half-done is worse than one never started, because the
+records end up in a state nobody asked for. If the request needs no change at all
+-- a question, a lookup, something the policy does not allow -- leave it empty.
+
+Each entry has three parts: `tool` is the call to make, `record` is the identifier
+it lands on, and `what` is the instruction the assistant reads -- a few words
+saying what has to change about that record. Fill in all three. An entry with no
+`what` reaches the assistant as a bare tool name and tells it nothing it did not
+already know.
+
+**One entry per call.** A request that touches four reservations is four entries,
+each naming its own record in `record`, never one entry saying "for each
+reservation". Nothing downstream can expand that back out: the assistant makes
+one call and the check that asks whether the work is done sees a change that
+happened, so the other three stop being owed by anybody. If you do not know the
+records yet, say so in `lookups` and write the entries you can; you will be asked
+again the moment they come back.
+
+CHANGES ALREADY COMMITTED TO
+
+If the brief carries a list of changes still owed, this conversation has already
+promised them and not made them. Carry every one into `changes` again. The
+customer taking a turn to say yes is the normal shape of this job, not a reason to
+start the plan over -- and a change dropped here is dropped for good.
+
+The one thing that retires an owed change is the customer no longer wanting it.
+If they have narrowed the request or changed their mind, leave it out and plan
+what they now want.
 
 WHETHER IT IS ALLOWED IS NOT YOURS TO DECIDE
 
@@ -270,7 +305,12 @@ WHAT THE CUSTOMER HAS JUST ASKED FOR
 # as an instruction to find something to put there, which is the same reason
 # `render` leaves empty sections out of the plan.
 ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
-DONE = "CHANGES ALREADY MADE THIS TURN"
+DONE = "CHANGES ALREADY MADE IN THIS CONVERSATION"
+OWED = (
+    "CHANGES THIS CONVERSATION HAS ALREADY COMMITTED TO AND NOT YET MADE\n"
+    "These are still owed. Carry every one of them into `changes` again, unless "
+    "the customer has since said they do not want it."
+)
 
 
 PLAN = """
@@ -328,7 +368,8 @@ def brief(
     messages: list[ModelMessage],
     request: str | None,
     arrived: dict[str, str] | None = None,
-    done: list[str] | None = None,
+    done: list[Written] | None = None,
+    owed: list[Change] | None = None,
 ) -> str:
     """The case put to the planner: what has happened, and what was just asked.
 
@@ -338,8 +379,15 @@ def brief(
     it has not run. Passing them separately is the difference between planning
     from what was just learned and planning from what was known before the lookup.
 
-    `done` is the writes the gate has already approved this turn, so the answer to
-    "what next" is the remainder rather than the whole job again.
+    `done` is the writes the gate has already approved, so the answer to "what
+    next" is the remainder rather than the whole job again.
+
+    `owed` is the other half of that and the one the run was missing: writes this
+    conversation has already committed to and not made. A plan is rewritten from
+    scratch every time the customer speaks, and without being shown what it wrote
+    down last time the planner simply loses it -- one request covering six
+    reservations became a request covering the one most recently read, between two
+    consecutive plans, with nothing in between but a customer saying yes.
     """
     case = BRIEF.format(
         transcript=transcript(messages) or "(nothing yet)",
@@ -349,7 +397,10 @@ def brief(
         results = "\n".join(f"- {' '.join(str(text).split())}" for text in arrived.values())
         case = f"{case}\n\n{ARRIVED}\n{results}"
     if done:
-        case = f"{case}\n\n{DONE}\n" + "\n".join(f"- {name}" for name in dict.fromkeys(done))
+        made = dict.fromkeys(f"{w.tool} on {w.records[0]}" if w.records else w.tool for w in done)
+        case = f"{case}\n\n{DONE}\n" + "\n".join(f"- {line}" for line in made)
+    if owed:
+        case = f"{case}\n\n{OWED}\n" + "\n".join(f"- {line}" for line in _lines(owed))
     return case
 
 
@@ -366,8 +417,22 @@ def render(plan: Plan) -> str:
     if plan.confirm:
         body += ["", f"Confirm before changing anything: {plan.confirm}"]
     if plan.changes:
-        body += ["", "Then change, in this order:", *_numbered(plan.changes)]
+        body += ["", "Then change, in this order:", *_numbered(_lines(plan.changes))]
     return PLAN.format(body="\n".join(body))
+
+
+def _lines(changes: list[Change]) -> list[str]:
+    """A change as the actor reads it: the call, the record, and what it is for.
+
+    The record leads, because the failure this is here to stop is the actor
+    reading the list as one job rather than as four.
+    """
+    return [
+        f"{change.tool} on {change.record}: {change.what}".rstrip(": ")
+        if change.record
+        else f"{change.tool}: {change.what}".rstrip(": ")
+        for change in changes
+    ]
 
 
 def _numbered(lines: list[str]) -> list[str]:

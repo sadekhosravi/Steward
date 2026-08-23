@@ -60,7 +60,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 
 import llm
-from core.state import Demand, PendingCall, duplicated, mispriced, sources, ungrounded
+from core.state import Change, Demand, PendingCall, duplicated, mispriced, sources, ungrounded
 from workflows import for_policy
 
 __all__ = [
@@ -515,7 +515,7 @@ def review(
     observed: list[str],
     demanded: list[Demand] | None = None,
     turn: int = 0,
-    owed: list[str] | None = None,
+    owed: list[Change] | None = None,
 ) -> str:
     """The case put to the gate: what happened, what is proposed, what looks off,
     where each identifier came from, what this gate has already required, and what
@@ -534,7 +534,7 @@ def review(
         findings=findings(proposal, observed),
         provenance=provenance(proposal, observed),
         demands=demands(proposal, demanded or [], turn),
-        owed="\n".join(f"- {line}" for line in owed) if owed else NOTHING_OWED,
+        owed="\n".join(f"- {c.key}: {c.what}".rstrip(": ") for c in owed) if owed else NOTHING_OWED,
     )
 
 
