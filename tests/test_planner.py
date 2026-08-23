@@ -12,13 +12,14 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 from agents.gate import transcript
 from agents.planner import Plan, brief, build_planner, catalogue, render
-from core.kernel import Act, Kernel, Say
+from core.kernel import REPLAN_LIMIT, Act, Kernel, Say
 from tests.tools import CANCEL, LOOKUP
 
 POLICY = "Cancellations within 24 hours are free."
@@ -164,14 +165,34 @@ def test_a_plan_with_nothing_in_it_still_renders():
 
 
 def _counted(behaviour):
-    """A model that records how many times it was asked anything."""
-    calls: list[int] = []
+    """A model that records the case it was handed, once per time it was asked.
+
+    The case rather than a tally, so the same stand-in answers both questions a
+    re-plan raises: how often the planner ran, and whether the results that
+    prompted the run were in front of it.
+    """
+    asked: list[str] = []
 
     def wrapped(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        calls.append(1)
+        asked.append(
+            "\n".join(
+                part.content
+                for message in messages
+                for part in message.parts
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+            )
+        )
         return behaviour(messages, info)
 
-    return wrapped, calls
+    return wrapped, asked
+
+
+def _looks_up_every_time(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """An actor that never stops investigating. Only the budget ends the turn."""
+    seen = sum(1 for m in messages for p in m.parts if isinstance(p, ToolCallPart))
+    return ModelResponse(
+        parts=[ToolCallPart("get_reservation", {"reservation_id": "HKD3PS"}, f"c{seen}")]
+    )
 
 
 def _plans_the_goal(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -202,11 +223,13 @@ def _records_instructions(seen: list[str]):
     return actor
 
 
-def test_the_planner_runs_once_per_user_turn_not_once_per_tool_call():
-    """The whole cost argument for putting `plan` at the entry rather than in the loop.
+def test_the_planner_runs_again_when_a_lookup_comes_back():
+    """The turn's first plan is its worst-informed, and this is where that is fixed.
 
-    A turn of many tool calls re-enters `think` every time and `plan` never, because
-    `resume` returns into `act` and rejoins the graph below it.
+    `resume` returns into `act`, and `act` now rejoins the graph at `plan` rather
+    than below it -- so one lookup buys one more plan, written with the answer in
+    hand. It is the only edge that does this; a refusal or a held reply re-enters
+    `think` directly, because neither of them is news about the world.
     """
     planner, planned = _counted(_plans_the_goal)
     k = Kernel(
@@ -221,7 +244,177 @@ def test_the_planner_runs_once_per_user_turn_not_once_per_tool_call():
     assert isinstance(paused, Act)
     k.resume(thread, {paused.calls[0].id: "HKD3PS: economy"})
 
-    assert len(planned) == 1
+    assert len(planned) == 2
+
+
+def test_a_re_plan_is_shown_what_just_came_back():
+    """The results are on the state and not yet in the history -- the actor is what
+    folds them in, and it has not run. Handed over separately or not at all."""
+    planner, planned = _counted(_plans_the_goal)
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_looks_up_then_reports),
+        planner_model=FunctionModel(planner),
+    )
+    thread = k.new_thread()
+
+    paused = k.send(thread, "cancel HKD3PS")
+    k.resume(thread, {paused.calls[0].id: "HKD3PS: basic economy, flown"})
+
+    assert "HKD3PS: basic economy, flown" in planned[-1]
+
+
+def test_re_planning_stops_at_the_budget():
+    """Running out takes nothing away: the turn carries on under the plan it has."""
+    planner, planned = _counted(_plans_the_goal)
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_looks_up_every_time),
+        planner_model=FunctionModel(planner),
+    )
+    thread = k.new_thread()
+
+    step = k.send(thread, "cancel HKD3PS")
+    for _ in range(6):
+        if not isinstance(step, Act):
+            break
+        step = k.resume(thread, {call.id: "HKD3PS: economy" for call in step.calls})
+
+    assert len(planned) == 1 + REPLAN_LIMIT
+
+
+# --- a re-plan may widen the turn and may not narrow it ----------------------
+
+SECTIONED = """
+# Toy Policy
+
+Confirm before you change anything.
+
+## Domain Basic
+
+A reservation has a cabin.
+
+## Cancel flight
+
+Cancelling is free within 24 hours.
+
+## Refunds
+
+A refund takes five days.
+"""
+
+
+def _plans_in_turn(*payloads: dict):
+    """A planner whose answer changes between calls, then holds at the last one."""
+    remaining = list(payloads)
+
+    def planner(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        payload = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, payload)])
+
+    return planner
+
+
+def _state_after_one_lookup(planner_model, policy: str = POLICY) -> dict:
+    k = Kernel(
+        [LOOKUP],
+        policy=policy,
+        model=FunctionModel(_looks_up_then_reports),
+        planner_model=planner_model,
+    )
+    thread = k.new_thread()
+    paused = k.send(thread, "cancel HKD3PS")
+    k.resume(thread, {paused.calls[0].id: "HKD3PS: economy"})
+    return k.graph.get_state({"configurable": {"thread_id": thread}}).values
+
+
+def test_a_re_plan_cannot_drop_a_change_the_turn_still_owes():
+    """The failure this guards. `outstanding` counts `changes` against what the gate
+    approved, so a planner that decides mid-turn the job is done would empty the
+    list and switch the speaker off for the rest of the turn."""
+    owed = ["Cancel it with cancel_reservation."]
+
+    values = _state_after_one_lookup(
+        FunctionModel(
+            _plans_in_turn({"goal": GOAL, "changes": owed}, {"goal": GOAL, "changes": []})
+        )
+    )
+
+    assert values["changes"] == owed
+
+
+def test_a_re_plan_adds_a_change_it_has_only_now_realised_is_needed():
+    values = _state_after_one_lookup(
+        FunctionModel(
+            _plans_in_turn(
+                {"goal": GOAL, "changes": ["Cancel it."]},
+                {"goal": GOAL, "changes": ["Refund it."]},
+            )
+        )
+    )
+
+    assert values["changes"] == ["Cancel it.", "Refund it."]
+
+
+def test_a_re_plan_cannot_take_away_a_policy_section_the_actor_is_working_from():
+    """The original objection to moving a plan mid-turn, and the answer to it: the
+    rules only ever widen, so nothing the actor is halfway through applying goes."""
+    values = _state_after_one_lookup(
+        FunctionModel(
+            _plans_in_turn(
+                {"goal": GOAL, "policy_sections": ["Cancel flight"]},
+                {"goal": GOAL, "policy_sections": ["Refunds"]},
+            )
+        ),
+        policy=SECTIONED,
+    )
+
+    assert "Cancelling is free within 24 hours." in values["policy"]
+    assert "A refund takes five days." in values["policy"]
+
+
+def _behaves_in_turn(*behaviours):
+    """One stand-in per call, then the last one for good."""
+    remaining = list(behaviours)
+
+    def planner(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return (remaining.pop(0) if len(remaining) > 1 else remaining[0])(messages, info)
+
+    return planner
+
+
+def test_a_re_plan_that_never_answers_leaves_the_previous_plan_standing():
+    """Fails open, and more cheaply than the opening plan does: there is already a
+    plan, so a re-plan nobody answered costs the correction and nothing else."""
+    values = _state_after_one_lookup(
+        FunctionModel(_behaves_in_turn(_plans_the_goal, _refuses_to_plan))
+    )
+
+    assert GOAL in values["plan"]
+
+
+def test_a_re_plan_that_fails_still_spends_its_budget():
+    """A planner that cannot answer is the one most likely to be asked again on the
+    very next round trip, so a budget charged only for successes bounds nothing."""
+    k = Kernel(
+        [LOOKUP],
+        policy=POLICY,
+        model=FunctionModel(_looks_up_every_time),
+        planner_model=FunctionModel(_behaves_in_turn(_plans_the_goal, _refuses_to_plan)),
+    )
+    thread = k.new_thread()
+
+    step = k.send(thread, "cancel HKD3PS")
+    for _ in range(6):
+        if not isinstance(step, Act):
+            break
+        step = k.resume(thread, {call.id: "HKD3PS: economy" for call in step.calls})
+
+    assert k.graph.get_state({"configurable": {"thread_id": thread}}).values["replans"] == (
+        REPLAN_LIMIT
+    )
 
 
 def test_the_plan_reaches_the_actor_as_instructions():

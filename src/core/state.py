@@ -159,21 +159,40 @@ class StewardState(BaseModel):
     """Blocked attempts so far this user turn. Bounds the correction loop."""
 
     plan: str = ""
-    """The planner's route for this turn, rendered for the actor to read.
+    """The planner's route for this turn, rewritten each time a lookup comes back.
 
-    Written once when a user message arrives and left alone until the next one:
-    the tool results that come back mid-turn are answers to the plan, not reasons
-    to rewrite it, and a plan that moves while it is being followed is not one.
+    This used to be written once per user turn and left alone, on the reasoning
+    that mid-turn results are answers to the plan rather than reasons to rewrite
+    it. Measurement reversed it. The first plan of a turn is the one with the
+    least evidence behind it, and in the last full run 59 of 207 plans had a
+    refusal for a goal -- 23 of them written before the record that decides the
+    question had been read. Task 39 refused three permitted cancellations across
+    five turns and never called `get_reservation_details` once, because every
+    later plan re-derived the first one instead of the facts.
+
+    What the old reasoning got right is kept in how it is rewritten: `sections`
+    and `changes` only ever widen, so nothing the actor is working from is
+    removed underneath it. See `_plan`.
     """
 
     policy: str = ""
-    """The policy sections the planner routed this turn to, rendered.
+    """The policy sections the planner has routed this turn to, rendered.
 
-    Written and left alone on the same schedule as `plan`, and for the same
-    reason: the rules governing a turn are settled when it is planned, and a
-    procedure that changes underneath the actor half way through a change is
-    worse than the wrong one chosen up front.
+    Rewritten with `plan`, and only ever wider -- a re-plan can bring a section
+    in and cannot take one away. That is what keeps the original objection to
+    mid-turn re-planning answered: the rules the actor is midway through applying
+    stay in front of it, whatever the new plan concluded.
     """
+
+    sections: list[str] = Field(default_factory=list)
+    """Section names chosen so far this turn, kept so the next plan can widen them.
+
+    Stored rather than recovered from `policy`, for the same reason `changes` is
+    stored rather than parsed back out of `plan`: a set recovered from rendered
+    prose is a set waiting to drift."""
+
+    replans: int = 0
+    """Mid-turn plans written so far. Bounds the cost of asking again."""
 
     changes: list[str] = Field(default_factory=list)
     """The writes the planner said this turn needs, one line each, as it wrote them.

@@ -12,8 +12,8 @@ they run those calls against the real environment, and `resume()` feeds the
 results back in. Sub-agents added later inherit this for free: an interrupt
 resumes inside the node that raised it, however deep in the graph it sits.
 
-    plan -> think -> gate  -> act -> think -> ... -> END
-                  -> speak                       -> END
+    plan -> think -> gate  -> act -> plan -> think -> ... -> END
+                  -> speak                                -> END
 
 Nothing reaches `act` without passing `gate` first, and `act` emits `approved`
 rather than `calls`. That is structural on purpose: an approval that does not
@@ -34,14 +34,26 @@ manufactured most. `fixable` closes it: when the gate says its remediation needs
 nothing from the customer, a reply is held on that fact alone, with no model call
 and no judgement, because the ruling has already been made.
 
-`plan` sits at the entry rather than in the loop, and that placement is the whole
-of its cost control: a turn of twenty tool calls re-enters `think` twenty times
-and `plan` never, because `resume()` returns into `act` and rejoins below it. One
-planning call per user message, whatever the turn goes on to cost.
+`plan` sat at the entry and outside the loop, which was cheap and wrong. A plan
+is written before any lookup has run, so a turn's first plan is its worst
+informed, and the run showed the planner settling a policy question on that plan
+and then re-deriving its own answer on every later turn instead of the facts --
+task 39 refused three permitted cancellations over five turns without ever
+calling `get_reservation_details`. So `act` now rejoins the graph at `plan`
+rather than below it. It is the only edge that does: a refusal or a held reply
+re-enters `think` directly, because neither of those is news about the world, and
+re-planning on them would only re-derive the plan that produced them.
 
-That asymmetry is also why `plan` is where the policy is routed. It reads the
-whole policy once and hands the actor the sections this turn is about; the actor
-carries those through twenty rebuilds of its instructions instead of the lot.
+What that costs is bounded twice. `REPLAN_LIMIT` caps the calls, and running out
+takes nothing away -- the turn simply carries on under the plan it has. And a
+re-plan may only ever *widen*: the policy sections and the writes still owed are
+unioned, never replaced, so the rule the actor is halfway through applying cannot
+be removed underneath it and a planner that decides the job is done cannot empty
+the list the speaker counts against.
+
+`plan` is also where the policy is routed. It reads the whole policy and hands the
+actor the sections this turn is about; the actor carries those through twenty
+rebuilds of its instructions instead of the lot.
 
     kernel = Kernel(tools, policy)
     thread = kernel.new_thread()
@@ -99,6 +111,12 @@ REVISION_LIMIT = 2
 # is telling us it has nothing else to give. One push is the intervention; two is
 # nagging, and the customer is waiting through both.
 DEFERRAL_LIMIT = 1
+
+# Mid-turn re-plans per user turn. Tool results arrive about 1.2 times per turn
+# across a full run, so three covers the long investigations and caps what a
+# pathological one can spend: unlike the two budgets above, running out here
+# takes nothing away -- the turn carries on under the plan it already has.
+REPLAN_LIMIT = 3
 
 DENIAL = "This action was not performed. {reason} {remediation}"
 
@@ -161,30 +179,69 @@ def _history(state: StewardState) -> list[ModelMessage]:
 
 
 def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[str, Any]:
-    """Write down the route before the actor starts composing calls, and the rules it runs under.
+    """Write down the route, and rewrite it every time a lookup answers something.
+
+    Runs at the top of a user turn and again after each `act`, which is the only
+    node where anything new about the world arrives. The reason is the failure
+    this node was itself producing: a plan is written before any lookup has run,
+    so the turn's first plan is its worst-informed, and the run shows the planner
+    settling a policy question on that plan and then re-deriving the same answer
+    on every later turn rather than the facts. Asking again at the moment the
+    facts land is the only place that can be corrected.
+
+    The results have to be handed over separately. They are on `tool_results` and
+    not yet in `messages` -- the actor is what folds them into the history, and it
+    runs after this.
 
     Fails *open*, which is the opposite of the gate beside it and for the same
     reason. A verdict that never arrived authorises nothing, so a missing one has
     to refuse; a plan that never arrived withholds nothing, so a missing one costs
-    only the advice. The actor has solved tasks without it for three runs.
+    only the advice. The actor has solved tasks without it for three runs. A
+    *re*-plan that did not arrive costs even less: the previous plan stands, which
+    is what would have happened before any of this.
 
     The policy excerpt fails open in the stronger sense, because it *can* withhold:
     no plan means no sections named, and `excerpt` answers that with all of them.
     A turn the planner could not answer for is therefore exactly the prompt this
     node existed to build before any of it was selective.
     """
+    opening = state.prompt is not None
+    if not opening and state.replans >= REPLAN_LIMIT:
+        return {}
+    # Spent whether or not an answer comes back. A planner that cannot answer is
+    # the case most likely to be asked again on the very next round trip, and a
+    # budget only charged for successes would not bound it at all.
+    spent = state.replans if opening else state.replans + 1
     try:
-        plan = planner.run_sync(brief(_history(state), state.prompt)).output
+        plan = planner.run_sync(
+            brief(_history(state), state.prompt, state.tool_results, state.written)
+        ).output
     except UnexpectedModelBehavior:
+        if not opening:
+            return {"replans": spent}
         return {"plan": "", "policy": excerpt(policy, []), "changes": []}
+    # A re-plan may add to what the turn is working from and may not take away.
+    # The objection to moving a plan mid-turn was always that the actor loses the
+    # rule it was halfway through applying, and widening rather than replacing is
+    # what answers it -- for the policy sections, and for the writes still owed,
+    # which a planner that has decided the job is done would otherwise drop and
+    # silently disarm the speaker.
+    sections = plan.policy_sections if opening else _widen(state.sections, plan.policy_sections)
     return {
         "plan": render(plan),
-        "policy": excerpt(policy, plan.policy_sections),
+        "policy": excerpt(policy, sections),
+        "sections": sections,
         # Kept as the planner wrote them, for the speaker to count against what
         # the gate approves. A turn the planner could not answer for owes nothing,
         # which is the fail-open answer here too: no plan, no held messages.
-        "changes": plan.changes,
+        "changes": plan.changes if opening else _widen(state.changes, plan.changes),
+        "replans": spent,
     }
+
+
+def _widen(kept: list[str], added: list[str]) -> list[str]:
+    """Both lists, in order, without repeats."""
+    return list(dict.fromkeys([*kept, *added]))
 
 
 def _think(state: StewardState, assistant: Assistant) -> dict[str, Any]:
@@ -450,7 +507,12 @@ def build_graph(
         "gate", _route_gate, {"act": "act", "think": "think", "escalate": "escalate"}
     )
     graph.add_conditional_edges("speak", _route_speak, {"think": "think", END: END})
-    graph.add_edge("act", "think")
+    # The one edge in the graph that carries new facts. Everything else that
+    # returns to `think` -- a refusal, a held reply -- is the system arguing with
+    # itself, and re-planning on those would only re-derive the plan that produced
+    # them. Results from the environment are the only thing that can tell the plan
+    # it was wrong, so they are the only thing that gets to rewrite it.
+    graph.add_edge("act", "plan")
     # Straight to END, bypassing `speak`. Escalation exists precisely to end a turn
     # the gate would not let continue, so a check whose only power is to send the
     # actor back to work has nothing to say about it -- and holding that reply
@@ -508,9 +570,11 @@ class Kernel:
     def send(self, thread: str, text: str) -> Step:
         """Deliver a user message and run until the Kernel needs something.
 
-        Both budgets and both per-turn ledgers reset here, because a new message is
+        Every budget and both per-turn ledgers reset here, because a new message is
         a new plan: the changes about to be written down belong to this turn, and
-        so does the record of which of them have been approved.
+        so does the record of which of them have been approved. `sections` resets
+        with them -- widening is a rule about one turn's plans, not a reason for a
+        turn to inherit the last one's rules.
         """
         return self._run(
             thread,
@@ -518,7 +582,9 @@ class Kernel:
                 "prompt": text,
                 "revisions": 0,
                 "deferrals": 0,
+                "replans": 0,
                 "written": [],
+                "sections": [],
                 "correction": "",
                 "fixable": "",
                 # A reducer, so this adds one rather than setting one -- `send` does

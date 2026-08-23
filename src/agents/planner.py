@@ -208,9 +208,26 @@ If you genuinely cannot tell, leave it empty and the assistant is shown all of
 them -- which is safe, and worse than choosing, so do not use it to avoid the
 question.
 
-Keep every line short enough to act on. You will be asked again as the
-conversation goes on, so plan from what is true now, not from what you are hoping
-for.
+YOU WILL BE ASKED AGAIN, MID-TURN
+
+Every time a lookup comes back, you are asked for the plan again, and what came
+back is shown to you under WHAT JUST CAME BACK. That is the point of asking: the
+first plan of a turn is written before anything has been looked up, so it is the
+plan with the least evidence behind it, and the record you had not read is
+routinely the one that settles the question.
+
+So read what arrived and say what it changed. A record that shows the request is
+straightforward after all replaces a plan that assumed otherwise, and a record
+that rules the request out replaces one that assumed it was fine. Repeating the
+previous plan word for word when something new has arrived wastes the only chance
+to correct it.
+
+CHANGES ALREADY MADE THIS TURN lists the writes that have gone through. Plan the
+part that is left. Do not list them again, and do not treat the job as finished
+because one of several is done.
+
+Keep every line short enough to act on. Plan from what is true now, not from what
+you are hoping for.
 
 <tools>
 {tools}
@@ -229,6 +246,12 @@ CONVERSATION SO FAR
 WHAT THE CUSTOMER HAS JUST ASKED FOR
 {request}
 """.strip()
+
+# Only shown when there is something to show. A heading over an empty list reads
+# as an instruction to find something to put there, which is the same reason
+# `render` leaves empty sections out of the plan.
+ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
+DONE = "CHANGES ALREADY MADE THIS TURN"
 
 
 PLAN = """
@@ -282,12 +305,33 @@ def catalogue(tools: list[ToolDefinition]) -> str:
     return "\n".join(f"- {tool.name} ({_kind(tool)}): {_description(tool)}" for tool in tools)
 
 
-def brief(messages: list[ModelMessage], request: str | None) -> str:
-    """The case put to the planner: what has happened, and what was just asked."""
-    return BRIEF.format(
+def brief(
+    messages: list[ModelMessage],
+    request: str | None,
+    arrived: dict[str, str] | None = None,
+    done: list[str] | None = None,
+) -> str:
+    """The case put to the planner: what has happened, and what was just asked.
+
+    `arrived` and `done` are what makes a re-plan worth the call. The planner is
+    asked again the moment tool results come back, and those results are not in
+    `messages` yet -- the actor is the node that folds them into the history, and
+    it has not run. Passing them separately is the difference between planning
+    from what was just learned and planning from what was known before the lookup.
+
+    `done` is the writes the gate has already approved this turn, so the answer to
+    "what next" is the remainder rather than the whole job again.
+    """
+    case = BRIEF.format(
         transcript=transcript(messages) or "(nothing yet)",
         request=request or "(nothing new -- continue from the conversation above)",
     )
+    if arrived:
+        results = "\n".join(f"- {' '.join(str(text).split())}" for text in arrived.values())
+        case = f"{case}\n\n{ARRIVED}\n{results}"
+    if done:
+        case = f"{case}\n\n{DONE}\n" + "\n".join(f"- {name}" for name in dict.fromkeys(done))
+    return case
 
 
 def render(plan: Plan) -> str:
