@@ -545,8 +545,21 @@ def test_the_actor_is_shown_the_request_and_the_turn_separately():
 
 def test_the_standing_request_is_put_to_the_planner():
     assert WIDE in brief([], None, standing=WIDE)
-    assert "word for word" in brief([], None, standing=WIDE)
+    assert "keep both" in brief([], None, standing=WIDE)
 
 
 def _just_replies(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     return ModelResponse(parts=[TextPart("Right you are.")])
+
+
+def test_a_second_request_is_added_to_the_first_not_swapped_for_it():
+    """The defect the first version of this had. Told to keep the standing request
+    or replace it, the planner did neither with a customer who asked for something
+    *as well*: across four samples it kept the old one verbatim and dropped the new
+    ask entirely. Task 7 is exactly that shape -- a cancellation, and then "what do
+    my other flights cost" three messages later."""
+    standing = "Cancel Daiki Muller's two upcoming reservations."
+    case = brief([], "Also, what do my other upcoming flights cost in total?", standing=standing)
+
+    assert "keep both" in case
+    assert "no longer want it" in case

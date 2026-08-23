@@ -24,6 +24,7 @@ from tau2.environment.tool import Tool
 from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
 from adapters.tau2.descriptions import describe
+from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
 from core.kernel import Act, Kernel, Step
@@ -80,6 +81,13 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
 
     tau2 preserves `ToolCall.id` as `ToolMessage.id`, which is the same key the
     Kernel resumes on, so routing needs no bookkeeping of its own.
+
+    A result carrying a choice between flights gets the comparison appended on the
+    way through -- see `ranking`. Here rather than in the Kernel because knowing
+    that a list of rows with `prices` on them is a set of options, and that the
+    cheap one is worth pointing out, is knowledge about an airline. `ranked`
+    inspects the content and leaves alone anything it does not recognise, so no
+    list of tool names has to be kept right.
     """
     if isinstance(message, MultiToolMessage):
         tool_messages = message.tool_messages
@@ -87,7 +95,9 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
         tool_messages = [message]
     else:
         return None
-    return {m.id: m.content or "" for m in tool_messages}
+    return {
+        m.id: ranked(m.content or "") if not m.error else (m.content or "") for m in tool_messages
+    }
 
 
 def _to_tau2(step: Step) -> AssistantMessage:

@@ -136,6 +136,24 @@ You now have everything the change needs, and once the customer has agreed to th
 
 Every one of those values was read out of an earlier result. None was assumed.
 
+CHOOSING BETWEEN OPTIONS
+
+A search hands you several results in whatever order the system holds them. That
+order means nothing. Taking the first one is the single commonest way this job
+goes wrong -- four of the five wrong choices in the last full run were the row
+printed first, each time with a cheaper one two lines below it.
+
+So when a result offers you a choice, a comparison is appended underneath it,
+already worked out: the options ranked by price in each cabin, and by departure
+time. Read it, decide what the customer actually asked for -- the cheapest, the
+morning departure, the one that connects -- and say which option you took and why.
+If they have not said what matters to them and the difference is money, ask.
+
+Change only what was asked for. A customer who wants a different cabin is not
+asking for different flights, and swapping their flights while upgrading them is
+a change they did not agree to. Leave every segment as it stands unless the
+request was about the flights themselves.
+
 WHEN SOMETHING COMES BACK WRONG
 
 A rejected call is information, not a dead end: read what it says, fix the thing

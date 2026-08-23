@@ -77,12 +77,13 @@ class Plan(BaseModel):
     request: str = Field(
         default="",
         description=(
-            "The whole of what the customer has asked for, in one sentence, in their "
-            "terms and at their scope -- 'change the cabin on all four of their "
-            "upcoming reservations', not 'change the cabin on JG7FMM'. This outlives "
-            "the turn: if one is already standing, copy it forward word for word "
-            "unless the customer has since asked for something different. Never "
-            "narrow it to the record you happen to have just read."
+            "The whole of what the customer has asked for, in their terms and at "
+            "their scope -- 'change the cabin on all four of their upcoming "
+            "reservations', not 'change the cabin on JG7FMM'. This outlives the "
+            "turn: carry a standing one forward, and where the customer has just "
+            "asked for something as well, carry both. It only ever loses a part the "
+            "customer has said they no longer want. Never narrow it to the record "
+            "you happen to have just read."
         ),
     )
     goal: str = Field(
@@ -165,10 +166,15 @@ JG7FMM", and the other four were never mentioned again by anybody. Nothing
 downstream can restore a scope you drop here.
 
 So `request` is written in the customer's terms and at the customer's scope, and
-once written it is copied forward word for word. THE REQUEST AS IT STANDS, when
-the brief carries one, is what you copy. Change it only when the customer has
-asked for something different -- not when a lookup has told you something new,
-and not when part of it is done. `goal` is where progress goes.
+once written it is carried forward. THE REQUEST AS IT STANDS, when the brief
+carries one, is what you carry. A lookup never changes it, and neither does part
+of it being done -- `goal` is where progress goes.
+
+Only the customer changes it, and usually by adding. Somebody who asked you to
+cancel a booking and then asks what their other flights cost wants both, so the
+request becomes both; dropping the first because they have just said something
+else is how the cancellation is lost. Take a part away only where they have said
+they no longer want it.
 
 It is a scope in both directions. "Cancel the two flights for the Chicago trip"
 does not become "cancel their reservations": a request narrower than everything
@@ -342,9 +348,9 @@ WHAT THE CUSTOMER HAS JUST ASKED FOR
 # `render` leaves empty sections out of the plan.
 STANDING = (
     "THE REQUEST AS IT STANDS\n"
-    "Written when this request opened, before any of the lookups below had run. "
-    "Copy it into `request` word for word. Replace it only if the customer has "
-    "since asked for something different."
+    "Written before any of the lookups below had run. Carry it into `request`. If "
+    "the customer has just asked for something as well, add it and keep both. "
+    "Drop part of it only where they have said they no longer want it."
 )
 ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
 DONE = "CHANGES ALREADY MADE IN THIS CONVERSATION"
