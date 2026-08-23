@@ -32,7 +32,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import ExternalToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
-from core.state import Deps, invented
+from core.state import Deps, duplicated, invented
 
 __all__ = ["MAX_RETRIES", "ValidatedToolset"]
 
@@ -49,6 +49,12 @@ INVENTED = (
     "These values do not appear anywhere you have been shown, so they cannot be "
     "right: {paths}. Identifiers come from the environment -- look them up with a "
     "read tool and use what it returns. Do not guess and do not reuse an example."
+)
+
+REPEATED = (
+    "These entries are the same one twice: {paths}. If you meant two different "
+    "entries, write them out again with whatever actually tells them apart. If you "
+    "meant one, remove the repeat."
 )
 
 
@@ -84,15 +90,23 @@ class _SchemaValidator:
 
 
 def _grounded(ctx: RunContext[Deps], **arguments: Any) -> None:
-    """Refuse identifiers the system was never shown.
+    """Refuse identifiers the system was never shown, and entries written twice.
 
     Runs after the schema passes, on the validated arguments. The ledger arrives
     on `ctx.deps` because it grows with the conversation while the toolset is built
     once -- so it is passed per run, not captured here.
+
+    The repeat check is here rather than at the gate for the same reason the
+    schema check is: it is decidable without judgement, and a `ModelRetry` fixes
+    it inside the actor's own run, spending none of the two revisions the gate
+    allows and never reaching the environment.
     """
     paths = invented(arguments, ctx.deps.observed if ctx.deps else [])
     if paths:
         raise ModelRetry(INVENTED.format(paths=", ".join(f"`{p}`" for p in paths)))
+    repeats = duplicated(arguments)
+    if repeats:
+        raise ModelRetry(REPEATED.format(paths=", ".join(f"`{p}`" for p in repeats)))
 
 
 class ValidatedToolset(ExternalToolset[Deps]):

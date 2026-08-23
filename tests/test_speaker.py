@@ -330,3 +330,110 @@ def test_a_turn_the_speaker_never_saw_counts_nothing():
 
     state = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
     assert state.get("consulted", 0) == 0
+
+
+# --- a refusal the assistant could have fixed itself ------------------------
+
+
+def blocks_once_over_something_fixable():
+    """Refuse the first attempt, naming a fix that needs nobody, then allow it.
+
+    `recoverable` is the whole of the difference. Without it the actor reads any
+    remediation as an instruction and carries it all the way to the customer: 146
+    of the 203 refusals in the 50-task run ended the turn in talk rather than in a
+    second attempt, and the write never happened.
+    """
+    seen: list[int] = []
+
+    def critic(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(1)
+        if len(seen) > 1:
+            return _output(info, allowed=True, reason="The arguments are right now.")
+        return _output(
+            info,
+            allowed=False,
+            reason="The itinerary lists the same flight twice.",
+            remediation="Call cancel_reservation with the id from the lookup.",
+            recoverable=True,
+        )
+
+    return critic
+
+
+def blocks_pending_the_customer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    return _output(
+        info,
+        allowed=False,
+        reason="The customer has not agreed to the cancellation fee.",
+        remediation="Tell them the fee is 50 dollars and ask them to confirm.",
+        recoverable=False,
+    )
+
+
+def gives_up_then_acts():
+    """Reply after being refused -- the behaviour being corrected -- then call."""
+    seen: list[int] = []
+
+    def actor(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(1)
+        if len(seen) == 2:
+            return ModelResponse(parts=[TextPart("Sorry, I could not make that change.")])
+        call = ToolCallPart(
+            "cancel_reservation", {"reservation_id": SEEN_ID}, tool_call_id=uuid4().hex[:8]
+        )
+        return ModelResponse(parts=[call])
+
+    return actor
+
+
+def test_a_reply_after_a_fixable_refusal_is_held_without_asking_the_speaker():
+    """The economy argument, applied to a case the gate has already ruled on. There
+    is no judgement left to buy: the gate said the assistant was not waiting on
+    anybody, so a reply here is it walking away from work it was told it could do."""
+    speaker, consulted = counted(allows)
+    k = kernel(
+        gives_up_then_acts(), speaker, planning(CHANGE), gate=blocks_once_over_something_fixable()
+    )
+
+    step = k.send("t", f"cancel {SEEN_ID}")
+
+    assert isinstance(step, Act)
+    assert [c.name for c in step.calls] == ["cancel_reservation"]
+    assert consulted == []
+
+
+def test_the_held_reply_is_counted_like_any_other_hold():
+    """It bypasses the model, not the instruments. A hold nobody can count is the
+    hole the gate had, and skipping the counters would dig it again."""
+    k = kernel(
+        gives_up_then_acts(), allows, planning(CHANGE), gate=blocks_once_over_something_fixable()
+    )
+    k.send("t", f"cancel {SEEN_ID}")
+
+    state = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert state["holds"] == 1
+    assert state["fixable"] == ""
+
+
+def test_a_refusal_waiting_on_the_customer_does_not_hold_the_reply():
+    """The other half, and the one that must not regress. When the gate's fix needs
+    the customer, ending the turn is the turn ending correctly -- holding it would
+    loop the actor against a condition only the customer can clear."""
+    speaker, consulted = counted(allows)
+    k = kernel(just_talks, speaker, planning(CHANGE), gate=blocks_pending_the_customer)
+
+    step = k.send("t", f"cancel {SEEN_ID}")
+
+    assert isinstance(step, Say)
+    assert len(consulted) == 1
+
+
+def test_an_approved_action_clears_a_fix_left_over_from_an_earlier_refusal():
+    """Otherwise the next reply of the turn is held over a refusal already answered."""
+    k = kernel(cancels_then_talks, allows, planning(CHANGE), gate=approves_writes)
+    step = k.send("t", f"cancel {SEEN_ID}")
+    k.resume("t", {step.calls[0].id: "Cancelled."})
+
+    state = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert state["fixable"] == ""
+    assert state.get("holds", 0) == 0

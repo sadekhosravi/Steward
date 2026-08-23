@@ -141,3 +141,58 @@ def test_every_tool_carries_the_validator_and_a_retry_budget():
     assert isinstance(tool.args_validator, _SchemaValidator)
     assert tool.args_validator_func is _grounded
     assert tool.max_retries == MAX_RETRIES
+
+
+# --- entries written twice --------------------------------------------------
+
+
+def test_a_passenger_named_twice_is_refused():
+    """Refused here rather than at the gate because it needs no judgement, and a
+    `ModelRetry` is corrected inside the actor's own run -- it spends none of the
+    two revisions the gate allows and never reaches the environment."""
+    with pytest.raises(ModelRetry, match="passengers"):
+        _grounded(
+            _Deps([]),
+            passengers=[
+                {"first_name": "Omar", "last_name": "Rossi", "dob": "1970-06-06"},
+                {"first_name": "Omar", "last_name": "Rossi", "dob": "1970-06-06"},
+            ],
+        )
+
+
+def test_a_flight_repeated_in_place_of_the_return_is_refused():
+    with pytest.raises(ModelRetry, match="flights"):
+        _grounded(
+            _Deps(["HAT169 DTW to JFK"]),
+            flights=[
+                {"flight_number": "HAT169", "date": "2024-05-17"},
+                {"flight_number": "HAT169", "date": "2024-05-19"},
+            ],
+        )
+
+
+def test_a_genuine_itinerary_passes():
+    assert (
+        _grounded(
+            _Deps(["HAT169 DTW to JFK", "HAT033 JFK to DTW"]),
+            flights=[
+                {"flight_number": "HAT169", "date": "2024-05-17"},
+                {"flight_number": "HAT033", "date": "2024-05-19"},
+            ],
+        )
+        is None
+    )
+
+
+def test_an_invented_identifier_is_reported_before_a_repeat():
+    """Order matters for the message the actor reads: a value it never saw is a
+    different mistake from one it wrote out twice, and hearing both at once is
+    how a correction turns into a guess."""
+    with pytest.raises(ModelRetry, match="do not appear anywhere"):
+        _grounded(
+            _Deps([]),
+            flights=[
+                {"flight_number": "HAT169", "date": "2024-05-17"},
+                {"flight_number": "HAT169", "date": "2024-05-19"},
+            ],
+        )

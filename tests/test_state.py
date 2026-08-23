@@ -6,7 +6,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
-from core.state import Obligation, StewardState, ungrounded, unmet
+from core.state import Obligation, StewardState, duplicated, sources, ungrounded, unmet
 from tests.tools import LOOKUP, PLANNER
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
@@ -86,3 +86,78 @@ def test_user_messages_and_tool_results_both_enter_the_ledger():
 
     observed = k.graph.get_state({"configurable": {"thread_id": thread}}).values["observed"]
     assert observed == ["check HKD3PS please", "HKD3PS: economy, 1 bag"]
+
+
+# --- entries written twice --------------------------------------------------
+
+
+def test_the_same_passenger_listed_twice_is_a_repeat():
+    """A real loss: a booking whose passenger list named one person two times."""
+    assert duplicated(
+        {
+            "passengers": [
+                {"first_name": "Omar", "last_name": "Rossi", "dob": "1970-06-06"},
+                {"first_name": "Omar", "last_name": "Rossi", "dob": "1970-06-06"},
+            ]
+        }
+    ) == ["passengers[0] and passengers[1]"]
+
+
+def test_a_leg_standing_in_for_its_own_return_is_a_repeat():
+    """The harder half, and the reason entries are compared on their identifiers
+    rather than whole. This itinerary's two legs differ in date and in price and
+    are still the same flight, in the same direction, twice."""
+    assert duplicated(
+        {
+            "flights": [
+                {"flight_number": "HAT169", "date": "2024-05-17", "price": 171},
+                {"flight_number": "HAT169", "date": "2024-05-19", "price": 124},
+            ]
+        }
+    ) == ["flights[0] and flights[1]"]
+
+
+def test_two_different_flights_are_not_a_repeat():
+    assert (
+        duplicated(
+            {
+                "flights": [
+                    {"flight_number": "HAT169", "date": "2024-05-17"},
+                    {"flight_number": "HAT033", "date": "2024-05-19"},
+                ]
+            }
+        )
+        == []
+    )
+
+
+def test_a_list_of_plain_values_is_left_alone():
+    """Two identical strings in a bare list can be meant, and guessing costs a retry."""
+    assert duplicated({"tags": ["window", "window"], "total_baggages": 2}) == []
+
+
+# --- where a value came from ------------------------------------------------
+
+
+def test_an_identifier_is_quoted_with_the_text_it_came_from():
+    """The check `invented` cannot make. Both ids are in the ledger, so both pass
+    it -- the question is which record the assistant is about to change, and the
+    only way to raise it is to show where the value was read."""
+    shown = ["Your reservations: FQ8APE (EWR to ORD, economy), UM3OG5 (LAS to DEN, basic)"]
+
+    (path, value, snippet) = sources({"reservation_id": "UM3OG5"}, shown)[0]
+
+    assert (path, value) == ("reservation_id", "UM3OG5")
+    assert "LAS to DEN" in snippet
+
+
+def test_an_identifier_that_was_never_shown_has_no_source():
+    assert sources({"reservation_id": "H0000X"}, ["nothing relevant"]) == [
+        ("reservation_id", "H0000X", "")
+    ]
+
+
+def test_only_identifiers_are_traced():
+    """Same narrowing as `invented`: a date or a name can be legitimately rewritten,
+    so quoting where it 'came from' would be quoting a coincidence."""
+    assert sources({"first_name": "Sophia", "total_baggages": 2}, ["Sophia Silva"]) == []

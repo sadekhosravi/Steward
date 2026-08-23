@@ -26,6 +26,14 @@ customer, whether the writes the planner asked for have happened. It is cheap by
 construction -- when nothing is outstanding it returns without a model call, which
 is every turn of every task that needs no writes at all.
 
+The two guards used to point at each other. The gate's commonest refusal sends
+the actor to ask the customer to confirm something, the actor turns that into a
+message, and the speaker's instructions tell it to allow every message that asks
+for confirmation -- so the exit the speaker exists to watch was the one the gate
+manufactured most. `fixable` closes it: when the gate says its remediation needs
+nothing from the customer, a reply is held on that fact alone, with no model call
+and no judgement, because the ruling has already been made.
+
 `plan` sits at the entry rather than in the loop, and that placement is the whole
 of its cost control: a turn of twenty tool calls re-enters `think` twenty times
 and `plan` never, because `resume()` returns into `act` and rejoins below it. One
@@ -70,7 +78,7 @@ from agents.gate import Verdict, build_gate, decide, review
 from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
-from core.state import Deps, PendingCall, StewardState
+from core.state import Demand, Deps, PendingCall, StewardState
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -93,6 +101,19 @@ REVISION_LIMIT = 2
 DEFERRAL_LIMIT = 1
 
 DENIAL = "This action was not performed. {reason} {remediation}"
+
+# Appended when the gate says the fix needs nothing from the customer. Without it
+# the actor reads any remediation as an instruction and follows it all the way to
+# the customer: 146 of the 203 refusals in the 50-task run ended the turn in talk
+# rather than in a second attempt, and the write never happened.
+SELF_FIX = (
+    " You can do this yourself, now, with what you already have. Make the corrected "
+    "call in this turn. Do not reply to the customer instead."
+)
+
+# Why a reply is held without asking the speaker. The gate has already ruled on
+# this, and said the assistant was not waiting on anybody.
+REFUSED = "The action you tried was refused for something you can put right yourself."
 
 ESCALATION = (
     "You have already tried to correct this and it is still not allowed. Stop here: "
@@ -236,17 +257,43 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     # simulation and scores 0, where refusing costs one action and is
     # recoverable. An unanswered check still fails closed, but only after the
     # call has been given more than one chance to come back.
-    verdict = decide(gate, review(_history(state), proposal, state.observed))
+    verdict = decide(
+        gate,
+        review(_history(state), proposal, state.observed, state.demanded, state.turns),
+    )
     if verdict.allowed:
-        return {"approved": state.calls, "calls": [], "written": state.written + writes}
+        return {
+            "approved": state.calls,
+            "calls": [],
+            "written": state.written + writes,
+            "fixable": "",
+        }
 
     message = DENIAL.format(reason=verdict.reason, remediation=verdict.remediation)
+    if verdict.recoverable:
+        message = f"{message}{SELF_FIX}"
     return {
         "approved": [],
         "calls": [],
         "denied": {call.id: message for call in proposal},
         "revisions": state.revisions + 1,
+        "demanded": _remember(state.demanded, writes, verdict.reason, state.turns),
+        # Only a fix the assistant can carry out alone. A refusal waiting on the
+        # customer is not something to send it back over -- that is the turn
+        # ending correctly, and holding the reply would loop it against a
+        # condition only the customer can clear.
+        "fixable": verdict.remediation if verdict.recoverable else "",
     }
+
+
+def _remember(demanded: list[Demand], writes: list[str], reason: str, turn: int) -> list[Demand]:
+    """The demand ledger with this refusal recorded, keeping the latest per action.
+
+    The latest and not all of them: what matters is the condition still standing,
+    and a list of every version the gate has ever phrased would bury it.
+    """
+    kept = [demand for demand in demanded if demand.action not in set(writes)]
+    return kept + [Demand(action=name, reason=reason, turn=turn) for name in dict.fromkeys(writes)]
 
 
 def _speak(state: StewardState, speaker: Agent[None, Verdict]) -> dict[str, Any]:
@@ -262,8 +309,27 @@ def _speak(state: StewardState, speaker: Agent[None, Verdict]) -> dict[str, Any]
     withholds the turn from the customer and cannot itself produce a write, so a
     check that did not answer must not be the reason a customer is left waiting.
     """
+    if state.deferrals >= DEFERRAL_LIMIT:
+        return {}
+
+    # The gate has already ruled on this, and said the fix needed nothing from the
+    # customer. There is no judgement left to buy: a reply now is the actor walking
+    # away from work it was just told it could do. Free, and it closes the loop the
+    # two checks were leaving open between them -- the gate's commonest refusal
+    # sends the actor to ask the customer to confirm, and the speaker's
+    # instructions tell it to allow every message that asks for confirmation.
+    if state.fixable:
+        return {
+            "correction": HELD.format(reason=REFUSED, remediation=state.fixable),
+            "reply": "",
+            "deferrals": state.deferrals + 1,
+            "consulted": state.consulted + 1,
+            "holds": state.holds + 1,
+            "fixable": "",
+        }
+
     owed = outstanding(state.changes, state.written)
-    if not owed or state.deferrals >= DEFERRAL_LIMIT:
+    if not owed:
         return {}
 
     # `consulted` is returned on both branches, and that is the whole reason it
@@ -454,6 +520,12 @@ class Kernel:
                 "deferrals": 0,
                 "written": [],
                 "correction": "",
+                "fixable": "",
+                # A reducer, so this adds one rather than setting one -- `send` does
+                # not read the state before writing to it. `demanded` is deliberately
+                # not reset beside these: the whole use of it is that the customer
+                # answers a condition on a later turn than the one that imposed it.
+                "turns": 1,
             },
             "message",
             text=text,

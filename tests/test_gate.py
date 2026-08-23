@@ -16,19 +16,27 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.gate import (
     FALLBACK,
+    NARROW,
+    NO_DEMANDS,
     NO_FINDINGS,
+    NO_PROVENANCE,
     OUTPUT_RETRIES,
     UNAVAILABLE,
+    build_gate,
+    decide,
+    demands,
     findings,
+    provenance,
     transcript,
 )
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
-from core.state import PendingCall
+from core.state import Demand, PendingCall
 from tests.tools import CANCEL, LOOKUP, PLANNER
 
 SEEN_ID = "HKD3PS"
@@ -415,3 +423,213 @@ def test_a_gate_that_never_answers_emits_no_write():
     assert k.graph.get_state({"configurable": {"thread_id": "t"}}).values["observed"] == [
         "cancel HKD3PS"
     ]
+
+
+# --- the narrowed fallback --------------------------------------------------
+
+
+def answers_only_the_narrow_question(allowed: bool):
+    """Never fills the four-field verdict in, but can say yes or no.
+
+    The measured failure this exists for: 38 of the 166 write refusals in the
+    50-task run carried the words "the policy check did not complete", which is a
+    20B model unable to compose the output object -- not a judgement about the
+    action. Every one of them blocked something nobody had ruled on.
+    """
+
+    def critic(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        asked = " ".join(
+            str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart)
+        )
+        if NARROW in asked:
+            return ModelResponse(
+                parts=[ToolCallPart(info.output_tools[0].name, {"response": allowed})]
+            )
+        return ModelResponse(parts=[TextPart("I am not sure how to fill that in.")])
+
+    return critic
+
+
+def test_a_verdict_that_never_parses_is_asked_again_in_one_bit():
+    gate = build_gate("Cancel freely.", FunctionModel(answers_only_the_narrow_question(True)))
+
+    verdict = decide(gate, "cancel_reservation(reservation_id='HKD3PS')")
+
+    assert verdict.allowed
+
+
+def test_the_narrowed_check_can_still_refuse():
+    """It is a fallback, not an amnesty. The point is that an answer is reached,
+    not that the answer is yes."""
+    gate = build_gate("Never cancel.", FunctionModel(answers_only_the_narrow_question(False)))
+
+    verdict = decide(gate, "cancel_reservation(reservation_id='HKD3PS')")
+
+    assert not verdict.allowed
+    assert verdict.remediation.strip()
+
+
+def test_an_action_stands_refused_when_neither_check_answers():
+    """The floor is unchanged: refusing is still the only honest thing to say about
+    an action nobody managed to look at."""
+    gate = build_gate("Be careful.", FunctionModel(never_answers))
+
+    assert decide(gate, "cancel_reservation(reservation_id='HKD3PS')") is UNAVAILABLE
+
+
+# --- what the gate has already required -------------------------------------
+
+CANCELLATION = [PendingCall(id="c1", name="cancel_reservation", arguments={})]
+
+CONFIRM = Demand(
+    action="cancel_reservation",
+    reason="The policy requires the customer to confirm, and they have not.",
+    turn=1,
+)
+
+
+def test_a_condition_the_customer_has_had_a_chance_to_answer_is_shown_back():
+    """The gate has no memory of its own, and re-deriving 'have they confirmed?'
+    from prose is what it gets wrong most: 70 of 166 write refusals in the 50-task
+    run were the same demand made a second time."""
+    rendered = demands(CANCELLATION, [CONFIRM], turn=2)
+
+    assert "cancel_reservation" in rendered
+    assert "confirm" in rendered
+    assert "once" in rendered
+
+
+def test_a_condition_imposed_on_the_turn_still_running_is_not_shown():
+    """Nothing has happened since it was imposed. Showing it would be the gate
+    arguing with itself, and inviting it to drop a condition it just set."""
+    assert demands(CANCELLATION, [CONFIRM], turn=1) == NO_DEMANDS
+
+
+def test_only_conditions_on_the_actions_being_proposed_are_shown():
+    baggage = [PendingCall(id="c2", name="update_reservation_baggages", arguments={})]
+
+    assert demands(baggage, [CONFIRM], turn=3) == NO_DEMANDS
+
+
+def test_a_gate_that_has_required_nothing_says_so():
+    assert demands(CANCELLATION, [], turn=2) == NO_DEMANDS
+
+
+# --- where each identifier came from ----------------------------------------
+
+
+def test_the_gate_is_shown_the_text_each_identifier_was_read_from():
+    """The failure `findings` cannot see. Both reservations are in the ledger, so
+    neither is invented -- the question is which record is about to be changed,
+    and the only way to raise it is to quote where the value was read."""
+    proposal = [
+        PendingCall(id="c1", name="cancel_reservation", arguments={"reservation_id": "UM3OG5"})
+    ]
+    shown = ["Your bookings: FQ8APE (EWR to ORD, economy), UM3OG5 (LAS to DEN, basic economy)"]
+
+    rendered = provenance(proposal, shown)
+
+    assert "UM3OG5" in rendered
+    assert "LAS to DEN" in rendered
+
+
+def test_an_identifier_with_no_source_says_so():
+    proposal = [
+        PendingCall(id="c1", name="cancel_reservation", arguments={"reservation_id": INVENTED_ID})
+    ]
+
+    assert "nothing in the conversation" in provenance(proposal, ["unrelated text"])
+
+
+def test_a_proposal_carrying_no_identifiers_says_so():
+    proposal = [PendingCall(id="c1", name="send_certificate", arguments={"amount": 100})]
+
+    assert provenance(proposal, ["anything"]) == NO_PROVENANCE
+
+
+# --- entries written twice --------------------------------------------------
+
+
+def test_an_entry_written_twice_reaches_the_gate_as_a_finding():
+    """The toolset refuses these first, so this is the second line rather than the
+    first. It is here because `findings` is the gate's whole view of what the
+    deterministic pass saw, and a check missing from it reads as a check that
+    passed."""
+    proposal = [
+        PendingCall(
+            id="c1",
+            name="update_reservation_passengers",
+            arguments={
+                "reservation_id": SEEN_ID,
+                "passengers": [
+                    {"first_name": "Omar", "dob": "1970-06-06"},
+                    {"first_name": "Omar", "dob": "1970-06-06"},
+                ],
+            },
+        )
+    ]
+
+    assert "same entry twice" in findings(proposal, [SEEN_ID, "Omar", "1970-06-06"])
+
+
+# --- the demand ledger, across turns ----------------------------------------
+
+
+def records_then_approves(cases: list[str]):
+    """Refuse for want of confirmation once, then approve, keeping every case seen."""
+
+    def critic(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        cases.append(
+            " ".join(
+                str(p.content) for m in messages for p in m.parts if isinstance(p, UserPromptPart)
+            )
+        )
+        if len(cases) > 1:
+            return _verdict(info, allowed=True, reason="They have now confirmed.")
+        return _verdict(
+            info,
+            allowed=False,
+            reason="The policy requires the customer to confirm, and they have not.",
+            remediation="Ask the customer to confirm the cancellation.",
+        )
+
+    return critic
+
+
+def proposes_then_talks(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Propose the write; on a refusal just received, take it to the customer.
+
+    The refusal has to be read off the *last* message, not the whole history: a
+    turn later it is still in there, and an actor that never proposes again is one
+    that cannot show the ledger reaching a second review.
+    """
+    if [p for p in messages[-1].parts if isinstance(p, RetryPromptPart)]:
+        return ModelResponse(parts=[TextPart("Shall I go ahead and cancel it?")])
+    call = ToolCallPart(
+        "cancel_reservation", {"reservation_id": SEEN_ID}, tool_call_id=uuid4().hex[:8]
+    )
+    return ModelResponse(parts=[call])
+
+
+def test_a_condition_imposed_last_turn_is_put_back_in_front_of_the_gate():
+    """The gate is handed a transcript and asked to rule, so a condition it set one
+    turn ago has to be re-derived from prose every time -- and 70 of the 166 write
+    refusals in the 50-task run were it failing to and demanding the same thing
+    again. Recording the demand turns that into something it is told."""
+    cases: list[str] = []
+    k = kernel(proposes_then_talks, records_then_approves(cases))
+
+    k.send("t", f"cancel {SEEN_ID}")
+    k.send("t", "yes please, go ahead")
+
+    assert len(cases) == 2
+    assert NO_DEMANDS in cases[0]
+    assert "You refused cancel_reservation earlier" in cases[1]
+    assert "replied once since" in cases[1]
+
+
+def test_the_first_review_of_a_conversation_has_nothing_to_report():
+    cases: list[str] = []
+    kernel(proposes_a_cancellation, records_then_approves(cases)).send("t", f"cancel {SEEN_ID}")
+
+    assert NO_DEMANDS in cases[0]

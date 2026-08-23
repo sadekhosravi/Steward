@@ -52,16 +52,19 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 
 import llm
-from core.state import PendingCall, ungrounded
+from core.state import Demand, PendingCall, duplicated, sources, ungrounded
 
 __all__ = [
     "ATTEMPTS",
     "FALLBACK",
+    "NARROWED_BLOCK",
     "UNAVAILABLE",
     "Verdict",
     "build_gate",
     "decide",
+    "demands",
     "findings",
+    "provenance",
     "review",
     "transcript",
 ]
@@ -99,6 +102,15 @@ class Verdict(BaseModel):
             "value to fetch. Leave empty when the action is allowed."
         ),
     )
+    recoverable: bool = Field(
+        default=False,
+        description=(
+            "Only when `allowed` is false. True when the assistant can carry the "
+            "remediation out itself, right now, with what it already has: fix an "
+            "argument, look a value up, call a different tool. False when the "
+            "remediation needs something only the customer can give."
+        ),
+    )
 
 
 INSTRUCTIONS = """
@@ -117,7 +129,21 @@ PROPOSED ACTION is the exact call or calls about to be made, with their real
 arguments. Judge those arguments, not what the assistant said it was going to do.
 
 AUTOMATED CHECKS lists values in the proposal that appear nowhere in the
-conversation. They are leads to follow, not verdicts.
+conversation, and entries the proposal repeats. They are leads to follow, not
+verdicts.
+
+WHERE EACH IDENTIFIER CAME FROM quotes, for every identifier in the proposal, the
+line of the conversation it was taken from. Read it. A value being *somewhere* in
+the conversation is not the same as it being the right one: a reservation the
+customer owns but never mentioned, or a second gift card on the same profile,
+will both appear here attached to text that shows they are not what was asked
+for. This is the one check that catches an action aimed at the wrong record.
+
+WHAT YOU ALREADY REQUIRED is the conditions you yourself imposed on earlier
+attempts at these same actions, and how many times the customer has replied
+since. If they have answered what you asked for, the condition is met. Making the
+same demand twice is the single most common way this gate loses a task -- it is
+what happened on 70 of the 166 refusals in the last full run.
 
 The proposal is a single step and you judge it as one: if any part of it is not
 allowed, the whole step is refused, so account for all of it.
@@ -222,7 +248,7 @@ Example 6 -- BLOCK. A handoff standing in for a refusal.
 
 HOW TO ANSWER
 
-Always three fields, whichever way you decide.
+Four fields, whichever way you decide.
 
 `allowed` is true if the policy permits this action now, false if it does not.
 
@@ -230,6 +256,14 @@ Always three fields, whichever way you decide.
 
 `remediation` is filled in only when `allowed` is false, and left empty when it
 is true.
+
+`recoverable` is filled in only when `allowed` is false. Set it true when the
+assistant can carry out your remediation itself on its next attempt -- correcting
+an argument, looking a value up, calling a different tool -- and false when your
+remediation needs something only the customer can supply, such as their agreement
+or a choice between options. Get this right: a true answer sends the assistant
+straight back to make the corrected call, and a false one ends the turn and hands
+the conversation to the customer.
 
 HOW TO REFUSE
 
@@ -282,6 +316,12 @@ PROPOSED ACTION
 
 AUTOMATED CHECKS
 {findings}
+
+WHERE EACH IDENTIFIER CAME FROM
+{provenance}
+
+WHAT YOU ALREADY REQUIRED
+{demands}
 """.strip()
 
 
@@ -295,6 +335,26 @@ CAVEAT = (
 )
 
 NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the conversation."
+
+NO_PROVENANCE = "The proposed action carries no identifiers."
+
+NO_DEMANDS = "Nothing. You have not refused any of these actions before."
+
+# Written as a reminder of the gate's own words rather than as a summary of them,
+# because the summary is the thing it gets wrong: asked "has the customer
+# confirmed?" it re-reads the transcript and answers no. Asked "you required X and
+# they have replied twice since" it has the question and the answer side by side.
+DEMAND = (
+    "You refused {action} earlier, requiring: {reason}\n"
+    "  The customer has replied {replies} since. If what they said answers what you "
+    "required, that condition is now met -- do not require it a second time."
+)
+
+REPEATED = "- {call}: `{paths}` are the same entry twice."
+
+FROM = "- {path} = {value!r}\n    taken from: {snippet}"
+
+NOWHERE = "- {path} = {value!r}\n    taken from: nothing in the conversation."
 
 
 # Malformed answers from the model, inside one `run_sync`. A 20B model sometimes
@@ -318,6 +378,33 @@ UNAVAILABLE = Verdict(
     allowed=False,
     reason="The policy check did not complete, so this action was never authorised.",
     remediation="Propose the same action again.",
+)
+
+# The same question with the answer collapsed to one bit, asked when the
+# structured verdict never arrives. The failure it answers is not judgment: 38 of
+# the 166 write refusals in the 50-task run were this path, a 20B model unable to
+# fill in a four-field object inside its retry budget, and every one of them
+# blocked an action nobody had ruled on. One boolean is the smallest thing that
+# can still be an answer, and it is the same collapse that made the gate
+# answerable when it stopped being a two-tool union.
+NARROW = (
+    "Answer with true or false and nothing else. Does the policy permit the "
+    "proposed action, exactly as written, right now? Answer true if it does. "
+    "Answer false if it does not."
+)
+
+NARROWED_ALLOW = Verdict(
+    allowed=True,
+    reason="The full policy check did not return, and the narrowed check permitted this action.",
+)
+
+NARROWED_BLOCK = Verdict(
+    allowed=False,
+    reason="The full policy check did not return, and the narrowed check refused this action.",
+    remediation=(
+        "Tell the customer what you are trying to do and what you need from them "
+        "to do it. Do not repeat this action unchanged."
+    ),
 )
 
 # What a refusal that named no fix is turned into. The union output type used to
@@ -355,7 +442,7 @@ def decide(gate: Agent[None, Verdict], case: str, attempts: int = ATTEMPTS) -> V
             verdict = gate.run_sync(case).output
         except UnexpectedModelBehavior:
             if remaining == 1:
-                return UNAVAILABLE
+                return _narrowed(gate, case)
             continue
         if not verdict.allowed and not verdict.remediation.strip():
             return verdict.model_copy(update={"remediation": FALLBACK})
@@ -363,24 +450,101 @@ def decide(gate: Agent[None, Verdict], case: str, attempts: int = ATTEMPTS) -> V
     return UNAVAILABLE
 
 
-def review(messages: list[ModelMessage], proposal: list[PendingCall], observed: list[str]) -> str:
-    """The case put to the gate: what happened, what is proposed, what looks off."""
+def _narrowed(gate: Agent[None, Verdict], case: str) -> Verdict:
+    """The last ask before refusing unread: the same case, one bit of answer.
+
+    Reached only when the four-field verdict never parsed, which measurement says
+    is a shape problem and not a judgement -- so asking the same question in a
+    shape that cannot be got wrong is worth one more call. `output_type` is
+    overridden per run rather than by building a second agent, which keeps the
+    instructions, the policy and the retry budget identical to the check that
+    just failed. Only if this fails too does the action stand refused unread.
+    """
+    try:
+        allowed = gate.run_sync(f"{case}\n\n{NARROW}", output_type=bool).output
+    except UnexpectedModelBehavior:
+        return UNAVAILABLE
+    return NARROWED_ALLOW if allowed else NARROWED_BLOCK
+
+
+def review(
+    messages: list[ModelMessage],
+    proposal: list[PendingCall],
+    observed: list[str],
+    demanded: list[Demand] | None = None,
+    turn: int = 0,
+) -> str:
+    """The case put to the gate: what happened, what is proposed, what looks off,
+    where each identifier came from, and what this gate has already required."""
     return REVIEW.format(
         transcript=transcript(messages) or "(nothing yet)",
         proposal="\n".join(f"{c.name}({_arguments(c.arguments)})" for c in proposal),
         findings=findings(proposal, observed),
+        provenance=provenance(proposal, observed),
+        demands=demands(proposal, demanded or [], turn),
     )
 
 
 def findings(proposal: list[PendingCall], observed: list[str]) -> str:
-    """PRE-GATE: the deterministic pass, reported as evidence rather than a verdict."""
+    """PRE-GATE: the deterministic pass, reported as evidence rather than a verdict.
+
+    Two checks, both free and neither a judgement: values the assistant was never
+    shown, and entries it wrote down twice -- a passenger repeated on a booking, a
+    leg of an itinerary standing in for its own return.
+    """
     lines = [
         f"- {call.name}: the value given for `{name}` appears nowhere in what the "
         f"assistant has been shown."
         for call in proposal
         for name in ungrounded(call.arguments, observed)
     ]
+    lines += [
+        REPEATED.format(call=call.name, paths=path)
+        for call in proposal
+        for path in duplicated(call.arguments)
+    ]
     return "\n".join([*lines, "", CAVEAT]) if lines else NO_FINDINGS
+
+
+def provenance(proposal: list[PendingCall], observed: list[str]) -> str:
+    """Every identifier in the proposal, quoted with the text it was taken from.
+
+    Evidence, in the same spirit as `findings`, for a failure that one cannot see:
+    an identifier is checked for having been shown, never for having been shown
+    *about the thing being changed*. A reservation the customer owns but never
+    mentioned passes untouched, and two tasks were lost that way -- one modifying
+    the wrong booking, one paying with the wrong gift card. Quoting the
+    surrounding text puts the question in front of something that can answer it,
+    and costs no model call and no knowledge of the domain.
+    """
+    lines = [
+        (FROM if snippet else NOWHERE).format(
+            path=f"{call.name}.{path}", value=value, snippet=snippet
+        )
+        for call in proposal
+        for path, value, snippet in sources(call.arguments, observed)
+    ]
+    return "\n".join(lines) if lines else NO_PROVENANCE
+
+
+def demands(proposal: list[PendingCall], demanded: list[Demand], turn: int) -> str:
+    """What this gate has already required of these same actions, and since when.
+
+    Only demands the customer has had a chance to answer are shown: one made on
+    the turn still in progress is the gate arguing with itself.
+    """
+    proposed = {call.name for call in proposal}
+    replied = {1: "once", 2: "twice"}
+    lines = [
+        DEMAND.format(
+            action=demand.action,
+            reason=" ".join(demand.reason.split()),
+            replies=replied.get(turn - demand.turn, f"{turn - demand.turn} times"),
+        )
+        for demand in demanded
+        if demand.action in proposed and turn > demand.turn
+    ]
+    return "\n".join(f"- {line}" for line in lines) if lines else NO_DEMANDS
 
 
 def transcript(messages: list[ModelMessage]) -> str:

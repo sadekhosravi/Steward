@@ -36,6 +36,20 @@ confirmation has done the right thing and has changes still outstanding, and it
 will look identical to this check's deterministic half. That case is the reason
 the model is asked at all, and it is why the instructions spend more room on when
 to let the reply stand than on when to hold it.
+
+WHAT THIS NODE NO LONGER HAS TO CATCH
+
+That exemption for confirmation requests is broad, and for a while it was too
+broad: the gate's most common refusal is a demand for confirmation, the actor
+turns that demand into a message, and this check was told to allow every message
+of exactly that shape. The two guards were pointed at each other, and it converted
+none of the four holds it managed on the 50-task run.
+
+So the case is taken off it. A refusal the gate marked as needing nothing from
+the customer holds the reply in the Kernel, deterministically, before this node
+is reached -- the ruling was already made and there is no second opinion left to
+buy. What arrives here is what it was always for: a turn nobody has refused
+anything on, where the plan named a change and the actor is leaving without it.
 """
 
 from __future__ import annotations

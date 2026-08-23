@@ -20,11 +20,24 @@ without a model and reused by whichever node ends up calling them.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import operator
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
-__all__ = ["Deps", "StewardState", "Obligation", "PendingCall", "invented", "ungrounded", "unmet"]
+__all__ = [
+    "Demand",
+    "Deps",
+    "StewardState",
+    "Obligation",
+    "PendingCall",
+    "duplicated",
+    "invented",
+    "sources",
+    "ungrounded",
+    "unmet",
+]
 
 
 class Deps(BaseModel):
@@ -67,6 +80,30 @@ class PendingCall(BaseModel):
     id: str
     name: str
     arguments: dict[str, Any]
+
+
+class Demand(BaseModel):
+    """Something the gate required before it would allow an action.
+
+    Kept because the gate has no memory of its own. It is handed a transcript and
+    asked to rule, so a condition it imposed one turn ago -- almost always "the
+    customer has not confirmed" -- has to be re-derived from prose every time, and
+    it frequently is not: 70 of the 166 write refusals in the 50-task run were the
+    same demand made again after the customer had already answered it. Recording
+    the demand turns that from something the gate must reconstruct into something
+    it is told.
+    """
+
+    action: str
+    """The tool that was refused."""
+
+    reason: str
+    """What the gate said it required, verbatim, so the answer can be matched to
+    the question that was actually asked."""
+
+    turn: int
+    """Which user turn imposed it. The gate compares this against the current turn
+    to know whether the customer has had a chance to answer."""
 
 
 class Obligation(BaseModel):
@@ -171,6 +208,26 @@ class StewardState(BaseModel):
     holds: int = 0
     """Times the speaker has sent a reply back, over the whole conversation."""
 
+    turns: Annotated[int, operator.add] = 0
+    """User messages received so far. A reducer rather than a plain field because
+    `send` sets it without reading the state first, and the count is the only thing
+    that tells a demand made this turn from one the customer has already answered."""
+
+    demanded: list[Demand] = Field(default_factory=list)
+    """What the gate has required and not yet been shown, latest per action.
+
+    Kept for the whole conversation, not the turn: the point of it is that the
+    customer answers on a *later* turn than the one that asked."""
+
+    fixable: str = ""
+    """The remediation from the last refusal the assistant could carry out itself.
+
+    Set only when the gate says the fix needs nothing from the customer, and it is
+    what turns a refusal into another attempt instead of the end of the turn. In
+    the 50-task run 146 of 203 refusals ended in talk, because the remediation is
+    written as an instruction and the actor followed it to the customer. Cleared
+    the moment an action is approved, or the message is held over it."""
+
     observed: list[str] = Field(default_factory=list)
     """Every text the system has been shown: user messages and tool results."""
 
@@ -217,6 +274,66 @@ def invented(arguments: dict[str, Any], observed: list[str]) -> list[str]:
     """
     corpus = "\n".join(observed)
     return [path for path, value in _identifiers(arguments) if value not in corpus]
+
+
+def duplicated(arguments: dict[str, Any]) -> list[str]:
+    """Entries repeated inside one list argument, as `name[i] and name[j]` paths.
+
+    Free, domain-free, and it catches a mistake no schema can: a booking whose
+    passenger list names the same person twice, an itinerary whose return leg is
+    the outbound flight again. Both were losses in the 50-task run, and both are
+    the model copying the previous line instead of composing the next one.
+
+    Two entries are the same when their identifiers match, or -- for entries that
+    carry none -- when they are identical outright. Comparing identifiers rather
+    than whole entries is what makes the itinerary case visible: the repeated leg
+    differed in its date and its price and was still the same flight.
+    """
+    repeats = []
+    for name, value in arguments.items():
+        if not isinstance(value, list) or len(value) < 2:
+            continue
+        seen: dict[str, int] = {}
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                continue
+            ids = _identifiers(item)
+            key = json.dumps(sorted(ids) if ids else item, sort_keys=True)
+            if key in seen:
+                repeats.append(f"{name}[{seen[key]}] and {name}[{index}]")
+            else:
+                seen[key] = index
+    return repeats
+
+
+def sources(arguments: dict[str, Any], observed: list[str]) -> list[tuple[str, str, str]]:
+    """For each identifier in a call: its path, its value, and the text it came from.
+
+    The counterpart to `invented`, and the answer to what that check cannot see.
+    `invented` asks whether a value was ever shown; this asks *where*. An
+    identifier belonging to the customer's other reservation passes `invented`
+    untouched -- it is in the ledger, just on the wrong record -- and that is
+    exactly how two tasks were lost, one modifying a booking the customer had not
+    mentioned and one paying with the wrong gift card.
+
+    Quoting the line each value came from is the whole of the check. Deciding
+    whether that line is the right one is a judgment, so it is left to the reader.
+    """
+    found = []
+    for path, value in _identifiers(arguments):
+        line = next((text for text in reversed(observed) if value in text), "")
+        found.append((path, value, _around(line, value)))
+    return found
+
+
+def _around(text: str, value: str, width: int = 70) -> str:
+    """The text either side of `value`, collapsed onto one line."""
+    if not text:
+        return ""
+    at = text.find(value)
+    start, end = max(0, at - width), min(len(text), at + len(value) + width)
+    clip = " ".join(text[start:end].split())
+    return f"{'...' if start else ''}{clip}{'...' if end < len(text) else ''}"
 
 
 def _identifiers(value: Any, path: str = "") -> list[tuple[str, str]]:
