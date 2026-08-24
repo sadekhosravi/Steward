@@ -26,6 +26,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from llm.config import LLMConfigError, ModelSpec
+from llm.harmony import harmonised
 
 __all__ = [
     "PROVIDERS",
@@ -157,5 +158,7 @@ def build_model(spec: ModelSpec) -> Model:
     if cache is None:
         cache = _local.models = {}
     if spec not in cache:
-        cache[spec] = _construct(spec)
+        # Wrapped on the way out rather than inside `_construct`, so every path
+        # that builds a model gets the repair and none has to remember to ask.
+        cache[spec] = harmonised(_construct(spec))
     return cache[spec]
