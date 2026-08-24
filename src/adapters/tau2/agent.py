@@ -26,6 +26,7 @@ from tau2.environment.toolkit import MUTATES_STATE_ATTR
 from adapters.tau2.baggage import bags
 from adapters.tau2.descriptions import describe
 from adapters.tau2.eligibility import eligibility
+from adapters.tau2.money import money
 from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
@@ -108,7 +109,7 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
 
 
 # Every note that can be worked out from a tool result, in the order they read.
-NOTES = (ranked, totals, eligibility, bags)
+NOTES = (ranked, totals, eligibility, bags, money)
 
 
 def _noted(content: str) -> str:

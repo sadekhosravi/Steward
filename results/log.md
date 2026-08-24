@@ -130,3 +130,120 @@ four gold actions per trial-set out of the read column.
   script, so they can differ by a few thousandths from the figures tau2's own
   summary printed for Run 001 (0.365 / 43.2%). The columns above are internally
   consistent.
+
+## Per-task history
+
+Every Steward simulation ever run at full scale, collapsed to one line per task:
+**820 simulations across nine runs** (001, 002, diag, 003, 005, speaker_49,
+fixes_50, parts_50, all_parts_50). The control is excluded from the mean --
+it is a different agent -- and shown in its own column.
+
+This table exists because a single trial cannot tell a change from weather.
+Task 22 scored 1.0 in `all_parts_50` and 0.0 in the seventeen other
+simulations of it; read against that one trial, a later run looks like a
+regression when nothing regressed. `Mean` is the number to compare against.
+
+`Band` is just the mean bucketed: **solid** >= 0.8, **volatile** 0.2-0.8,
+**cold** 0-0.2, **never** exactly 0. `Writes` is how many write actions the
+task's gold trajectory contains.
+
+| Task | Sims | Mean | Band | Writes | Control |
+|---|---|---|---|---|---|
+| 0 | 18 | 0.89 | solid | 0 | 1 |
+| 1 | 18 | 0.94 | solid | 0 | 1 |
+| 2 | 16 | 0.62 | volatile | 0 | 1 |
+| 3 | 16 | 0.38 | volatile | 0 | 0 |
+| 4 | 18 | 0.94 | solid | 0 | 1 |
+| 5 | 17 | 0.65 | volatile | 0 | 1 |
+| 6 | 14 | 0.50 | volatile | 0 | - |
+| 7 | 18 | 0.00 | never | 3 | 0 |
+| 8 | 17 | 0.06 | cold | 1 | 1 |
+| 9 | 18 | 0.67 | volatile | 0 | 1 |
+| 10 | 18 | 0.56 | volatile | 0 | 0 |
+| 11 | 18 | 0.11 | cold | 1 | 0 |
+| 12 | 18 | 0.06 | cold | 1 | 1 |
+| 13 | 18 | 0.83 | solid | 0 | 1 |
+| 14 | 18 | 0.00 | never | 2 | 0 |
+| 15 | 18 | 0.11 | cold | 1 | 0 |
+| 16 | 18 | 0.11 | cold | 1 | 1 |
+| 17 | 18 | 0.00 | never | 3 | 0 |
+| 18 | 17 | 0.00 | never | 5 | 0 |
+| 19 | 18 | 0.50 | volatile | 1 | 0 |
+| 20 | 17 | 0.06 | cold | 1 | 0 |
+| 21 | 17 | 0.00 | never | 2 | 0 |
+| 22 | 18 | 0.06 | cold | 3 | 0 |
+| 23 | 17 | 0.00 | never | 4 | 0 |
+| 24 | 17 | 0.00 | never | 1 | 0 |
+| 25 | 17 | 0.53 | volatile | 1 | 1 |
+| 26 | 17 | 0.94 | solid | 0 | 1 |
+| 27 | 16 | 0.81 | solid | 0 | 1 |
+| 28 | 16 | 1.00 | solid | 0 | 1 |
+| 29 | 17 | 0.00 | never | 2 | 0 |
+| 30 | 17 | 0.18 | cold | 1 | 1 |
+| 31 | 16 | 0.62 | volatile | 0 | 1 |
+| 32 | 16 | 0.31 | volatile | 2 | 0 |
+| 33 | 16 | 0.00 | never | 2 | 1 |
+| 34 | 17 | 0.59 | volatile | 0 | 0 |
+| 35 | 13 | 0.00 | never | 1 | - |
+| 36 | 15 | 0.87 | solid | 0 | 1 |
+| 37 | 16 | 0.00 | never | 1 | 0 |
+| 38 | 16 | 0.75 | volatile | 0 | 1 |
+| 39 | 16 | 0.00 | never | 3 | 0 |
+| 40 | 16 | 0.50 | volatile | 1 | 0 |
+| 41 | 15 | 0.67 | volatile | 0 | 1 |
+| 42 | 15 | 0.00 | never | 2 | 0 |
+| 43 | 15 | 0.93 | solid | 0 | 1 |
+| 44 | 14 | 0.00 | never | 3 | 0 |
+| 45 | 9 | 1.00 | solid | 0 | - |
+| 46 | 15 | 1.00 | solid | 0 | 1 |
+| 47 | 15 | 0.73 | volatile | 0 | 1 |
+| 48 | 15 | 0.47 | volatile | 0 | 1 |
+| 49 | 15 | 0.73 | volatile | 0 | 1 |
+
+### What the table says
+
+**Reward is a function of one variable, and it is not difficulty.**
+
+| Gold writes | Tasks | Mean reward |
+|---|---|---|
+| 0 | 24 | 0.75 |
+| 1 | 13 | 0.17 |
+| 2 | 6 | 0.05 |
+| 3 | 5 | 0.01 |
+| 4 | 1 | 0.00 |
+| 5 | 1 | 0.00 |
+
+- The 24 tasks needing **no** write average **0.75**.
+  The 26 that need one or more average **0.10**.
+- **Not one of the 11 solid tasks requires a write. Not one of the
+  14 never-passing tasks is write-free.** The separation is total.
+- The collapse is monotone in the number of writes, which is what DB being
+  all-or-nothing over the whole database predicts: each additional write is
+  another chance to get an argument wrong, and one wrong argument scores the
+  same as no write at all.
+
+**Steward's mean of per-task means is 0.414**, over 820 simulations.
+That is a better estimate of where the system actually sits than any single
+run's headline -- `all_parts_50` printed 0.460 and `005` printed 0.333, and
+neither is as informative as this.
+
+**The control averages 0.532** on the 47 tasks it ran, still ahead. It
+scores 1.0 on five tasks Steward averages under 0.2 on: 8, 12, 16, 30, 33.
+Every one of those needs one or two writes. They are the cheapest evidence
+available that those tasks are winnable by this model.
+
+**Headroom, if the bands were converted:**
+
+- the 14 never-passing tasks are worth **+0.28** reward
+- the 8 cold tasks are worth **+0.15** on top of that
+- the 17 volatile tasks are worth +0.14, but they are
+  where run-to-run noise lives, so buying them is not the same kind of work.
+
+### How to use it
+
+Before claiming a change helped, look up the tasks it targeted here. A task
+that flips from 0 to 1 having never passed in eighteen simulations is
+evidence. A volatile task moving is not. And a run whose headline sits above
+or below 0.414 has said nothing until the per-task rows are read: `all_parts_50`
+scored 0 on tasks 2 and 6, which average 0.62 and 0.50, and 1.0 on task 22,
+which averages 0.06.
