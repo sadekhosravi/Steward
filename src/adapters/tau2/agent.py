@@ -23,7 +23,9 @@ from tau2.data_model.message import (
 from tau2.environment.tool import Tool
 from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
+from adapters.tau2.baggage import bags
 from adapters.tau2.descriptions import describe
+from adapters.tau2.eligibility import eligibility
 from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
@@ -84,16 +86,15 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
     Kernel resumes on, so routing needs no bookkeeping of its own.
 
     A result carrying a choice between flights gets the comparison appended on the
-    way through -- see `ranking` -- and one carrying a reservation gets its own
-    arithmetic appended, see `totals`. Here rather than in the Kernel because
-    knowing that a list of rows with `prices` on them is a set of options, that
-    the cheap one is worth pointing out, and that a fare is charged per passenger,
-    is knowledge about an airline.
+    way through -- see `ranking` -- and one carrying a reservation gets both its
+    own arithmetic (`totals`) and the policy conditions it settles
+    (`eligibility`). Here rather than in the Kernel because knowing that a list of
+    rows with `prices` on them is a set of options, that the cheap one is worth
+    pointing out, that a fare is charged per passenger, and that a business cabin
+    is one of four grounds for a cancellation, is knowledge about an airline.
 
-    Both inspect the content and leave alone anything they do not recognise, so no
-    list of tool names has to be kept right and the order they run in does not
-    matter: a search is a list and a booking is an object, so no result is ever
-    something both of them can read.
+    All three inspect the content and leave alone anything they do not recognise,
+    so no list of tool names has to be kept right -- see `_noted`.
     """
     if isinstance(message, MultiToolMessage):
         tool_messages = message.tool_messages
@@ -102,9 +103,28 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
     else:
         return None
     return {
-        m.id: totals(ranked(m.content or "")) if not m.error else (m.content or "")
-        for m in tool_messages
+        m.id: _noted(m.content or "") if not m.error else (m.content or "") for m in tool_messages
     }
+
+
+# Every note that can be worked out from a tool result, in the order they read.
+NOTES = (ranked, totals, eligibility, bags)
+
+
+def _noted(content: str) -> str:
+    """The result, with each note that applies appended below it.
+
+    Every note is handed the *raw* result rather than the previous one's output.
+    All three parse the text as JSON to decide whether they have anything to say,
+    so chaining them would leave the second reading a record with a block of
+    English stapled to it, and it would fall silent. Which one runs first would
+    then decide which notes appear at all, on a record that qualifies for two.
+
+    Each note returns the content it was given, either unchanged or with its
+    block appended, so the tail past `len(content)` is exactly what that note
+    added and nothing else.
+    """
+    return content + "".join(note(content)[len(content) :] for note in NOTES)
 
 
 def _to_tau2(step: Step) -> AssistantMessage:
