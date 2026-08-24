@@ -499,6 +499,9 @@ WINDOW = 400
 # flagging those would bury the one finding that matters.
 _MONEY = ("price", "amount", "total", "cost", "fee")
 
+# What marks an entry as settling a bill rather than quoting a price.
+_SETTLEMENT = "payment"
+
 
 def mispriced(arguments: dict[str, Any], observed: list[str]) -> list[str]:
     """Money quoted against an identifier it was never shown beside, as paths.
@@ -518,6 +521,16 @@ def mispriced(arguments: dict[str, Any], observed: list[str]) -> list[str]:
     """
     flags = []
     for path, entry in _entries(arguments):
+        # What is paid is settled, not quoted. An amount put against a payment
+        # method is a remainder worked out from everything else in the basket, so
+        # it is never shown beside the instrument it is charged to and cannot be
+        # judged by whether it was: a card carries a brand and a last_four and no
+        # balance at all. Replayed against the benchmark's own gold actions this
+        # was the only thing the check ever flagged -- three correct payment
+        # splits on task 23, for 44, 621 and 621, which add up to the one figure
+        # that task is scored on.
+        if any(_SETTLEMENT in name.lower() for name in entry):
+            continue
         money = {
             name: value
             for name, value in entry.items()
@@ -537,12 +550,33 @@ def mispriced(arguments: dict[str, Any], observed: list[str]) -> list[str]:
         # be the same fault counted twice.
         if not windows:
             continue
+        # A window with nothing priced in it cannot be where a figure was copied
+        # from, so an amount missing from one is not evidence of anything.
+        if not any(_priced(window) for window in windows):
+            continue
         flags += [
             f"{path}{name}"
             for name, value in money.items()
             if not any(_figure(value) in window for window in windows)
         ]
     return flags
+
+
+def _priced(window: str) -> bool:
+    """Whether this window has any money in it at all.
+
+    The case this exists for is a credit card. Its record carries a brand and a
+    `last_four` and no balance, so the sum charged to one is always a remainder
+    worked out somewhere else and can never appear beside the card -- which made
+    every correctly split payment look like a figure taken off the wrong row.
+    Replayed against the benchmark's own gold actions, that was the only thing
+    this check ever flagged: three `book_reservation` calls on task 23, for 44,
+    621 and 621, which add up to the single figure that task is scored on.
+
+    The original catch is untouched. A flight row is full of prices, so the fare
+    read off the neighbouring flight still has a priced window to be missing from.
+    """
+    return any(name in window.lower() for name in _MONEY)
 
 
 def _entries(value: Any, path: str = "") -> list[tuple[str, dict[str, Any]]]:
@@ -572,7 +606,34 @@ def _windows(identifier: str, observed: list[str]) -> list[str]:
     same row rather than the same screenful. Tool results are JSON; text that is
     not falls back to the span.
     """
-    return [_object_around(text, at) for text in observed for at in _occurrences(text, identifier)]
+    return [
+        _object_at(text, at, len(identifier))
+        for text in observed
+        for at in _occurrences(text, identifier)
+    ]
+
+
+def _object_at(text: str, at: int, length: int) -> str:
+    """The record an identifier names, falling back to the one it sits inside.
+
+    An identifier is not always a field within a record; often it is the key the
+    record hangs off, as `payment_methods` hangs every card off its own id. Walking
+    outwards from a key lands on the object holding *all* of them, so every balance
+    in the block counts as shown beside every card -- which is the same
+    same-screenful confusion `_windows` matches braces to avoid, one level up.
+    """
+    named = _value_object(text, at + length)
+    return named if named is not None else _object_around(text, at)
+
+
+def _value_object(text: str, after: int) -> str | None:
+    """The object an identifier introduces as a key, as in `"X": { ... }`."""
+    index = after
+    while index < len(text) and (text[index] in '" :' or text[index].isspace()):
+        index += 1
+    if index < len(text) and text[index] == "{":
+        return text[index : _closing(text, index)]
+    return None
 
 
 def _object_around(text: str, at: int) -> str:

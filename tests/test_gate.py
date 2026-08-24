@@ -40,7 +40,7 @@ from agents.gate import (
     transcript,
 )
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
-from core.state import Change, Demand, PendingCall, mispriced
+from core.state import Change, Demand, PendingCall, _windows, mispriced
 from tests.tools import CANCEL, LOOKUP, PLANNER
 
 SEEN_ID = "HKD3PS"
@@ -757,6 +757,52 @@ def test_each_leg_is_judged_against_its_own_flight():
     }
 
     assert mispriced(call, [SEARCH]) == ["flights[1].price"]
+
+
+PROFILE = (
+    '{"user_id": "mohamed_silva_9265", "payment_methods": {'
+    '"gift_card_8020792": {"source": "gift_card", "id": "gift_card_8020792", "amount": 198.0}, '
+    '"credit_card_2198526": {"source": "credit_card", "id": "credit_card_2198526", '
+    '"brand": "mastercard", "last_four": "9363"}}}'
+)
+
+
+def test_what_is_charged_to_a_card_is_not_judged_as_a_price():
+    """A payment amount is a remainder worked out from the rest of the basket, so
+    it is never shown beside the instrument it is charged to. A card carries a
+    brand and a last_four and no balance at all, so asking whether the sum appears
+    beside it can only ever fail.
+
+    Replayed against the benchmark's own gold actions this was the only thing the
+    check ever flagged: three correct payment splits on task 23, for 44, 621 and
+    621 -- which add up to 1286, the single figure that task is scored on."""
+    call = {
+        "reservation_id": "K1NW8N",
+        "payment_methods": [
+            {"payment_id": "certificate_3765853", "amount": 500},
+            {"payment_id": "credit_card_2198526", "amount": 44},
+        ],
+    }
+
+    assert mispriced(call, [PROFILE]) == []
+
+
+def test_a_past_charge_to_the_same_card_does_not_make_the_next_one_wrong():
+    """The ledger holds every earlier settlement, and none of them is evidence
+    about this one."""
+    history = '{"payment_history": [{"payment_id": "credit_card_2198526", "amount": 2628}]}'
+    call = {"payment_methods": [{"payment_id": "credit_card_2198526", "amount": 44}]}
+
+    assert mispriced(call, [PROFILE, history]) == []
+
+
+def test_an_identifier_is_read_against_the_record_it_names():
+    """`payment_methods` hangs each record off its own id, so walking outwards
+    from the key lands on the object holding all of them -- and every balance in
+    the block would count as shown beside every card. The window is the record the
+    identifier names."""
+    assert "last_four" in _windows("credit_card_2198526", [PROFILE])[0]
+    assert "gift_card_8020792" not in _windows("credit_card_2198526", [PROFILE])[0]
 
 
 def test_the_gate_is_shown_the_mispricing_as_evidence():
