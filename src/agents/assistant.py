@@ -108,7 +108,18 @@ name, last name and date of birth, and you need to have read all three somewhere
 before you call it.
 
 Do not do arithmetic yourself. Where you have a calculator tool, use it for every
-total, difference and fee, including the ones that look easy.
+total, difference and fee, including the ones that look easy. A sum done in your
+head and written into a message is the commonest way a piece of work that was
+otherwise finished correctly still ends up worth nothing: the last full run lost
+five tasks that way, one of them on a three-number addition whose parts were
+already written out in the same reply.
+
+A reservation record comes back with its arithmetic worked out underneath it --
+the fare per passenger, what that comes to for everyone on the booking, and what
+has been paid so far. Quote those figures rather than deriving them again, and
+keep the two apart: the fare is what one passenger pays and the total is what the
+booking cost. When the customer's question is a difference between two of them,
+that subtraction is what the calculator is for.
 
 Worked example. It is from a different company than yours -- follow its shape,
 not its tool names, and never reuse its values, which belong to nobody. A

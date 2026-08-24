@@ -27,6 +27,7 @@ from adapters.tau2.descriptions import describe
 from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
+from adapters.tau2.totals import totals
 from core.kernel import Act, Kernel, Step
 
 
@@ -83,11 +84,16 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
     Kernel resumes on, so routing needs no bookkeeping of its own.
 
     A result carrying a choice between flights gets the comparison appended on the
-    way through -- see `ranking`. Here rather than in the Kernel because knowing
-    that a list of rows with `prices` on them is a set of options, and that the
-    cheap one is worth pointing out, is knowledge about an airline. `ranked`
-    inspects the content and leaves alone anything it does not recognise, so no
-    list of tool names has to be kept right.
+    way through -- see `ranking` -- and one carrying a reservation gets its own
+    arithmetic appended, see `totals`. Here rather than in the Kernel because
+    knowing that a list of rows with `prices` on them is a set of options, that
+    the cheap one is worth pointing out, and that a fare is charged per passenger,
+    is knowledge about an airline.
+
+    Both inspect the content and leave alone anything they do not recognise, so no
+    list of tool names has to be kept right and the order they run in does not
+    matter: a search is a list and a booking is an object, so no result is ever
+    something both of them can read.
     """
     if isinstance(message, MultiToolMessage):
         tool_messages = message.tool_messages
@@ -96,7 +102,8 @@ def _tool_results(message: ValidAgentInputMessage) -> dict[str, str] | None:
     else:
         return None
     return {
-        m.id: ranked(m.content or "") if not m.error else (m.content or "") for m in tool_messages
+        m.id: totals(ranked(m.content or "")) if not m.error else (m.content or "")
+        for m in tool_messages
     }
 
 
