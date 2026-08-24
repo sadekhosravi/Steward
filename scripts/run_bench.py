@@ -5,6 +5,21 @@
 
 Every `tau2 ...` command works here; the only difference is that `--agent steward`
 resolves. On Windows set PYTHONUTF8=1 first.
+
+Two settings are worth passing on any long run:
+
+  --user-llm-args '{"timeout": 300}'   tau2's user simulator goes through LiteLLM,
+which this module does not configure and `tracing` does not instrument, so a call
+that never returns leaves no span and stalls the whole run behind one task. One
+50-task run lost an hour that way. LiteLLM's own `num_retries` defaults to 3, so
+this bounds a turn at roughly four attempts rather than capping it outright; 300s
+is above every attempt observed in a full run and well under the stall it is
+there to catch. Our own sub-agents need nothing here -- `llm.config` already
+defaults them to 120s, and 2528 calls in one run topped out at 103s.
+
+  STEWARD_GATE=off                     approves every proposal without asking the
+critic, leaving the plan, the ledger and the speaker exactly where they were. A
+measurement arm for whether the critic pays for itself -- see `core.kernel`.
 """
 
 import os

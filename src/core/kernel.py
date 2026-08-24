@@ -63,6 +63,7 @@ rebuilds of its instructions instead of the lot.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -117,6 +118,23 @@ DEFERRAL_LIMIT = 1
 # pathological one can spend: unlike the two budgets above, running out here
 # takes nothing away -- the turn carries on under the plan it already has.
 REPLAN_LIMIT = 3
+
+
+# A measurement arm, not a mode. `STEWARD_GATE=off` approves every proposal
+# without asking the critic and leaves everything else exactly where it was --
+# the plan, the written ledger, the demands, the speaker. That isolates the one
+# thing under suspicion. On the 50-task run the critic refused fourteen writes
+# that were byte-identical to a gold action, gave opposite verdicts on the same
+# proposal 22 times across 17 of 50 tasks, and on five of the seven tasks that
+# wrote when they should not have it refused first and approved later. Whether
+# it pays for itself is a question the code cannot answer, so this is how it gets
+# asked. Read once at import: a run does not change its mind half way through.
+def _reviewing() -> bool:
+    """Whether the critic is consulted at all. `STEWARD_GATE=off` turns it off."""
+    return os.environ.get("STEWARD_GATE", "on").strip().lower() != "off"
+
+
+REVIEWING = _reviewing()
 
 DENIAL = "This action was not performed. {reason} {remediation}"
 
@@ -331,6 +349,32 @@ def _think(
     }
 
 
+def _approved(
+    state: StewardState, proposal: list[PendingCall], gated: frozenset[str]
+) -> dict[str, Any]:
+    """The step goes through, and the ledger records what it committed us to.
+
+    Shared by the critic's approval and by the bypass, so turning the critic off
+    changes what is judged and nothing else -- the written ledger, and therefore
+    what `outstanding` reports and when the speaker fires, stay identical. Split
+    out for exactly that reason: an arm that also silently emptied the ledger
+    would measure two changes and tell us about neither.
+
+    Recorded with the identifiers it named, not just its tool. Which of them is
+    "the" record is a question about a domain and `core` has none, so the ledger
+    keeps all of them and lets the plan's own record decide the match -- see
+    `outstanding`. Gated calls only: a lookup that happened to share a step with
+    a write discharges nothing.
+    """
+    return {
+        "approved": state.calls,
+        "calls": [],
+        "written": state.written
+        + [Written.of(c.name, c.arguments) for c in proposal if c.name in gated],
+        "fixable": "",
+    }
+
+
 def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
@@ -348,6 +392,8 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     writes = [call.name for call in proposal if call.name in gated]
     if not writes:
         return {"approved": state.calls, "calls": []}
+    if not REVIEWING:
+        return _approved(state, proposal, gated)
 
     # `decide` retries and never raises: letting a failure propagate ends the
     # simulation and scores 0, where refusing costs one action and is
@@ -370,18 +416,7 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
         ),
     )
     if verdict.allowed:
-        return {
-            "approved": state.calls,
-            "calls": [],
-            # Recorded with the identifiers it named, not just its tool. Which of
-            # them is "the" record is a question about a domain and `core` has
-            # none, so the ledger keeps all of them and lets the plan's own record
-            # decide the match -- see `outstanding`. Gated calls only: a lookup
-            # that happened to share a step with a write discharges nothing.
-            "written": state.written
-            + [Written.of(c.name, c.arguments) for c in proposal if c.name in gated],
-            "fixable": "",
-        }
+        return _approved(state, proposal, gated)
 
     message = DENIAL.format(reason=verdict.reason, remediation=verdict.remediation)
     if verdict.recoverable:

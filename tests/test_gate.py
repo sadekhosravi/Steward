@@ -816,3 +816,61 @@ def test_the_gate_is_shown_the_mispricing_as_evidence():
 
     assert "flights[0].price" in reported
     assert CAVEAT in reported
+
+
+def test_the_critic_can_be_taken_out_without_taking_the_ledger_with_it(monkeypatch):
+    """`STEWARD_GATE=off` is a measurement arm. It has to remove the critic's
+    judgement and nothing else: if it also emptied the written ledger, the
+    speaker would hold on every turn and the run would measure two changes at
+    once, telling us about neither."""
+    from core import kernel
+    from core.state import StewardState
+
+    call = {"id": "1", "name": "book_reservation", "arguments": {"reservation_id": "K1NW8N"}}
+    state = StewardState(calls=[call])
+
+    def never(*args, **kwargs):
+        raise AssertionError("the critic was asked despite being turned off")
+
+    monkeypatch.setattr(kernel, "REVIEWING", False)
+    monkeypatch.setattr(kernel, "decide", never)
+
+    out = kernel._gate(state, None, frozenset({"book_reservation"}))
+
+    assert out["approved"] == [call]
+    assert [w.tool for w in out["written"]] == ["book_reservation"]
+    assert [w.records for w in out["written"]] == [["K1NW8N"]]
+
+
+def test_a_read_only_step_still_writes_nothing_to_the_ledger_either_way(monkeypatch):
+    """The bypass approves writes without asking; it must not turn a lookup into
+    something the ledger thinks discharged a planned change."""
+    from core import kernel
+    from core.state import StewardState
+
+    state = StewardState(calls=[{"id": "1", "name": "get_user_details", "arguments": {}}])
+    monkeypatch.setattr(kernel, "REVIEWING", False)
+
+    out = kernel._gate(state, None, frozenset({"book_reservation"}))
+
+    assert out["approved"] == state.calls
+    assert "written" not in out
+
+
+def test_the_switch_is_off_only_when_asked(monkeypatch):
+    """Read through a function rather than re-imported, because reloading the
+    module rebuilds every class in it and silently breaks whatever already holds
+    a reference to one."""
+    from core import kernel
+
+    for value, expected in (
+        ("off", False),
+        ("OFF", False),
+        (" off ", False),
+        ("on", True),
+        ("", True),
+    ):
+        monkeypatch.setenv("STEWARD_GATE", value)
+        assert kernel._reviewing() is expected
+    monkeypatch.delenv("STEWARD_GATE")
+    assert kernel._reviewing() is True
