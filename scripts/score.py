@@ -76,6 +76,14 @@ class Run:
         a task that went 4/4 or 0/4 contributes zero, as it should.
         """
         n = self.trials
+        # One trial per task leaves nothing to estimate the spread *from*: the
+        # within-task variance this is built on needs at least two draws of the
+        # same task. Rather than divide by zero, say so with a nan and let the
+        # report print the point estimate on its own -- a run with no error bar
+        # is still worth reading, and a crash at the end of a 50-task run is not
+        # a good way to learn that the design could not carry one.
+        if n < 2:
+            return float("nan")
         var = sum(a * (n - a) / (n * (n - 1)) / n for a in map(sum, self.grid.values()))
         return math.sqrt(var) / len(self.grid)
 
@@ -111,13 +119,17 @@ def load(path: Path) -> Run:
 
 
 def report(run: Run) -> None:
-    ci = 1.96 * run.se_avg()
+    se = run.se_avg()
+    ci = 1.96 * se
     print(f"{run.name}")
     print(f"  simulations   {run.sims}  ({run.unscored} unscored, counted as 0)")
-    print(
-        f"  avg reward    {run.avg():.3f} +/- {run.se_avg():.3f}"
-        f"      95% {run.avg() - ci:.3f} - {run.avg() + ci:.3f}"
-    )
+    if math.isnan(se):
+        print(f"  avg reward    {run.avg():.3f}   (one trial per task: no error bar)")
+    else:
+        print(
+            f"  avg reward    {run.avg():.3f} +/- {se:.3f}"
+            f"      95% {run.avg() - ci:.3f} - {run.avg() + ci:.3f}"
+        )
     for k in range(1, run.trials + 1):
         bar = f" +/- {run.se_passk(k):.3f}" if k > 1 else ""
         print(f"  pass^{k}        {run.passk(k):.3f}{bar}")
