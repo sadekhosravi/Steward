@@ -31,6 +31,9 @@ not comparable to one that lost none.
 | fixes_50 | + SPEAKER, the check on the reply | 1 | 0.280 | 0.280 | — | — | — | 38/50 |
 | parts_50 | + workflows, planner in the loop, deterministic checks | 1 | 0.420 | 0.420 | — | — | — | 47/50 |
 | all_parts_50 | + Parts 1–6, harmony repair | 1 | **0.460** | 0.460 | — | — | — | **50/50** |
+| arm C `stable_ef6cffd_50x3` | **stable `ef6cffd`: monolithic critic on, no sieve** | 3 | **0.493 ±0.030** | 0.500 | 0.360 | 0.300 | — | 150/150 |
+| arm B `ab_control_50x3` | **control: tau2's own `llm_agent`, no scaffold** | 3 | 0.433 ±0.026 | 0.460 | 0.320 | 0.300 | — | 149/150 |
+| arm A `ab_steward_50x3` | Part 4 sieve `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
 
 `speaker_49` started at 01:57 on 08-23 and the SPEAKER commit landed at 02:54, so
 either the name is aspirational or the work was in the tree uncommitted. Which one
@@ -45,6 +48,9 @@ Deltas, paired on the shared tasks:
 | 003 − diag | +0.040 ± 0.057 (0.7 SE, p ≈ 0.48) | 5 / 3 / 42 | unproven at 5% |
 | parts_50 − 003 | +0.000 ± 0.064 (0.0 SE, p ≈ 1.00) | 5 / 5 / 40 | unproven at 5% |
 | all_parts_50 − parts_50 | +0.040 ± 0.081 (0.5 SE, p ≈ 0.62) | 9 / 7 / 34 | unproven at 5% |
+| arm C − arm B | +0.060 ± 0.039 (1.5 SE, p ≈ 0.12) | 14 / 6 / 30 | unproven at 5% |
+| arm A − arm C | −0.007 ± 0.044 (0.2 SE, p ≈ 0.88) | 11 / 14 / 25 | unproven at 5% |
+| arm A − arm B | +0.053 ± 0.042 (1.3 SE, p ≈ 0.20) | 11 / 6 / 33 | unproven at 5% |
 
 **No change to the architecture has ever been proven at the 5% level on this
 benchmark.** Every row above sits inside its own noise. That is a fact about the
@@ -69,6 +75,9 @@ four gold actions per trial-set out of the read column.
 | fixes_50 | 16/38 (42%) | 32/38 (84%) | 33 | 31 (94%) | 2/44 (4.5%) | 31/49 (63%) |
 | parts_50 | 21/48 (44%) | 44/48 (92%) | 41 | 34 (83%) | 6/50 (12%) | 57/89 (64%) |
 | all_parts_50 | **24/50 (48%)** | 46/50 (92%) | 57 | 37 (**65%**) | **20/50 (40%)** | **75/92 (82%)** |
+| arm C `stable_ef6cffd_50x3` | **79/150 (53%)** | 134/150 (89%) | 218 | 155 (71%) | **63/150 (42%)** | **215/276 (78%)** |
+| arm B `ab_control_50x3` (control) | 70/150 (47%) | 131/150 (87%) | 264 | 251 (95%) | 13/150 (9%) | 167/275 (61%) |
+| arm A `ab_steward_50x3` | 75/150 (50%) | **136/150 (91%)** | 219 | 184 (84%) | 35/150 (23%) | 206/276 (75%) |
 
 ## What the trend actually says
 
@@ -87,10 +96,124 @@ four gold actions per trial-set out of the read column.
   improved sharply (95% → 65%) but the absolute count did not fall. This is the
   binding constraint now, and nothing in the current architecture addresses it.
 - **The control still leads.** tau2's own `llm_agent`, with no scaffold at all,
-  scored 0.500 against Steward's best of 0.460. Everything built so far has bought
+  scored 0.500 against Steward's best of 0.460.
+  **Superseded 2026-08-25:** at three trials each the control scores 0.433 and
+  arm C scores 0.493. Both single-trial figures above were draws from a
+  distribution too wide to rank — see *The three-arm experiment*. Everything built so far has bought
   intermediate accuracy that the scoring function does not pay for.
 - **DB is where the losses are.** COMMUNICATE has sat between 84% and 92% since
   the first run and has never been the bottleneck.
+
+## The three-arm experiment
+
+Run 2026-08-25. The first comparison on this project with enough trials to say
+anything, and the first with a control run under identical conditions rather than
+quoted from an older row.
+
+**Held fixed across all three:** domain `airline`, 50 tasks x 3 trials, `--seed
+300`, `--auto-resume`, concurrency 8, tau2 rev `3571661`, `gpt-oss-20b` on both
+sides of the conversation at `temperature` 0.0. The arms differ only in the agent.
+
+| arm | commit | configuration |
+|---|---|---|
+| **C** | `ef6cffd` | monolithic critic **on** (its default at that commit), no sieve |
+| **B** | — | tau2's own `llm_agent`, no scaffold |
+| **A** | `73ad27f` | Part 4 deterministic sieve **on**, monolithic critic **off** |
+
+`src/agents/gate.py` is byte-identical between `ef6cffd` and `73ad27f`; only
+`kernel.py` changed. The critic is the same component in both arms — what moved
+was its wiring and its default, which flipped from `on` to `off`.
+
+### Reward says nothing. Behaviour says a great deal.
+
+Paired per task, which cancels task difficulty exactly:
+
+| | arm C − arm B | arm C − arm A |
+|---|---|---|
+| avg reward | +0.060 ± 0.039 (1.5 SE, p ≈ 0.12) | +0.007 ± 0.044 (0.2 SE, p ≈ 0.88) |
+| **gold-write recall** | **+0.311 ± 0.053 (5.9 SE, p < 0.0001)** | **+0.149 ± 0.044 (3.4 SE, p = 0.0007)** |
+| gold-read recall | +0.128 ± 0.032 (4.0 SE, p = 0.0001) | — |
+| transfer to human | −0.193 ± 0.048 (4.1 SE, p = 0.0001) | −0.267 ± 0.049 (5.5 SE) |
+| transfer, write-tasks only | −0.205 ± 0.067 (3.1 SE, p = 0.002) | −0.321 ± 0.068 (4.7 SE) |
+
+Transfer rates: **arm C 34.0%, arm B 53.0%, arm A 60.7%.** `transfer_to_human_agents`
+appears in the airline answer key exactly once across all 50 tasks, so a transfer
+is almost always an abstention rather than a fix.
+
+**Three systems this benchmark cannot separate on score — 0.493 / 0.487 / 0.433,
+every interval overlapping every other — complete 42.9% / 23.8% / 8.8% of the
+writes the customer actually asked for.** The control buys most of its reward by
+handing the customer to a human, and reward does not notice. That is the finding
+this project has to report; the architecture is the thing that made it visible,
+not the result.
+
+The smallest reward difference this design can resolve is **0.109**. Nothing in
+the reward column reaches it and nothing here claims otherwise.
+
+### Part 4 is a measured regression
+
+Arm A abstains more than arm C on every cut, and more than the *unscaffolded
+control* — which arm C was comfortably below. Six pre-sieve runs transfer at
+42–48%; arm A transfers at 60.7%. The Part 4 sieve bought write precision
+(over-writes 15.4% against arm C's 24.4%) by declining to act, and paid for it in
+work completed.
+
+**The experiment cannot say which half of Part 4 caused it.** Arm A changed two
+things at once — the sieve was added *and* the monolithic critic was switched
+off — so "the sieve blocks too much" and "the critic was doing useful work" fit
+the data equally well. The 2x2 has an empty cell:
+
+| | critic off | critic on |
+|---|---|---|
+| **sieve off** | `gate_off_50` 0.420 (1 trial) | **arm C 0.493** |
+| **sieve on** | **arm A 0.487** | *never run* |
+
+At `73ad27f` the deterministic panel runs unconditionally — `kernel._gate` calls
+it before consulting `REVIEWING` — so `STEWARD_GATE=on` at HEAD fills that cell
+with no code change at all.
+
+### Where arm C's remaining reward actually sits
+
+The scoring law holds again at this size: DB passes iff every gold write was made
+and no other write was.
+
+| arm C, 150 sims | count | DB pass |
+|---|---|---|
+| made every gold write, and nothing else | 75 | 74 |
+| made every gold write, **plus a surplus** | 21 | 5 |
+| missed a gold write | 54 | **0** |
+
+- **Under-writing is fatal without exception** — 0 of 54. Blocking cannot fix
+  this; a gate cannot cause a write that was never proposed.
+- **16 simulations did the whole job and lost to a surplus write**; 8 of those
+  lost to exactly one. Blocking every surplus write in the run would take reward
+  from 0.493 to **0.600** — a +0.107 ceiling, which is right at the resolution
+  limit and is a ceiling, not a forecast.
+- Surplus writes by tool: `cancel_reservation` 13, `book_reservation` 12,
+  `update_reservation_flights` 4, `update_reservation_baggages` 2,
+  `send_certificate` 1.
+
+### What these runs cannot show
+
+Gate decisions are **invisible in saved trajectories**. The whole system runs
+inside one `generate_next_message` call, so a refusal, a revision and an
+escalation never become emitted messages: searching all 300 simulations for the
+`DENIAL` text finds zero in both Steward arms. Every question of the form "did
+the gate cause this behaviour" is unanswerable from the artefacts on disk, which
+is why the 2x2 above has to be filled by running it rather than by re-reading it.
+Instrumenting this — a sidecar record of every proposal, verdict and reason —
+is the prerequisite for the next round of gate work.
+
+### A note on the Pass^k columns
+
+The table above reports `scripts/score.py`'s estimator, "the first k trials all
+passed", so it stays comparable with every earlier row. tau2's own definition
+(`agent_metrics.py:126`) is `C(successes, k) / C(trials, k)`, the average over
+every k-subset. Both are unbiased; tau2's has lower variance and the two coincide
+at k = n. For these arms tau2's formula gives C 0.493 / 0.360 / 0.300, B 0.433 /
+0.333 / 0.300, A 0.487 / 0.407 / 0.380. **Quote the tau2 figures in anything
+outward-facing**, and note that `score.py`'s docstring claim that tau2 defines
+pass^k as first-k is wrong.
 
 ## How to read this
 
