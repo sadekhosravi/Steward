@@ -46,10 +46,11 @@ defect that can be read and fixed rather than a rate to be traded off.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
-__all__ = ["Evidence", "Finding", "Verifier", "first"]
+__all__ = ["Describe", "Evidence", "Finding", "Panel", "Verifier", "first"]
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,20 @@ class Evidence:
     committed: tuple[str, ...] = ()
     looked_up: tuple[tuple[str, dict, str], ...] = ()
 
+    stated: Mapping[str, Any] = field(default_factory=dict)
+    """How the customer described the record, extracted from their own words.
+
+    The one entry here that a model produced, and it is deliberately shaped as
+    facts rather than a verdict: "one passenger", not "wrong reservation". The
+    comparison against the record is still arithmetic, still in code, and still
+    the only thing allowed to block -- see `agents.selector` for why the split
+    falls there and `adapters.tau2.intended` for what the keys mean.
+
+    Empty is the common case and means the customer described nothing, never that
+    nothing matches. A verifier reading this must treat a missing key exactly as
+    it treats a record it has not been shown: silence.
+    """
+
     @classmethod
     def of(
         cls,
@@ -120,8 +135,15 @@ class Evidence:
         dialogue: str = "",
         committed: list[str] | None = None,
         looked_up: list[tuple[str, dict, str]] | None = None,
+        stated: Mapping[str, Any] | None = None,
     ) -> Evidence:
-        return cls(tuple(observed), dialogue, tuple(committed or ()), tuple(looked_up or ()))
+        return cls(
+            tuple(observed),
+            dialogue,
+            tuple(committed or ()),
+            tuple(looked_up or ()),
+            dict(stated or {}),
+        )
 
 
 # A verifier sees one call and the evidence, and either has something to say or
@@ -129,6 +151,16 @@ class Evidence:
 # available: most of these rules are about a particular tool and a verifier that
 # had to be told which one separately would be one more thing to wire wrongly.
 Verifier = Callable[[object, Evidence], Finding | None]
+
+# The one thing in this file that a model produces, and it is kept behind a
+# callable the domain supplies for the same reason the verifiers are: rendering a
+# proposal into a question is knowledge about the domain, and `core` has none.
+#
+# It returns facts, never a verdict -- a mapping that becomes `Evidence.stated`
+# and is then compared by an ordinary verifier. Nothing downstream can tell
+# whether the mapping came from a model or from a file, which is the property that
+# keeps the blocking half deterministic.
+Describe = Callable[[object, Evidence], Mapping[str, Any]]
 
 
 @dataclass

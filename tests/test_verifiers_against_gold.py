@@ -45,6 +45,24 @@ def text_of(result):
         return json.dumps(result, default=str)
 
 
+def _read(environment, identifier, observed, looked_up):
+    """The lookup any run makes before touching a record, which gold omits."""
+    if not identifier:
+        return
+    arguments = {"reservation_id": identifier}
+    if any(name == "get_reservation_details" and args == arguments for name, args, _ in looked_up):
+        return
+    try:
+        result = environment.make_tool_call(
+            tool_name="get_reservation_details", requestor="assistant", **arguments
+        )
+    except Exception:  # a record this build cannot read is not evidence of anything
+        return
+    text = text_of(result)
+    observed.append(text)
+    looked_up.append(("get_reservation_details", arguments, text))
+
+
 @pytest.fixture(scope="module")
 def replayed():
     """Gold's writes, each with the evidence a run would have had at that point.
@@ -53,6 +71,22 @@ def replayed():
     these checks read the record *as it now stands*: task 7 upgrades a basic
     economy reservation to business and then cancels it, and a ledger built from
     the reads alone would still say basic economy.
+
+    Two things are supplied that gold's action list does not itself contain, and
+    both are things every real conversation has. An answer key is a list of
+    writes, not a transcript, and a check tested against it alone is being tested
+    against a state the Kernel cannot produce.
+
+    The customer's own briefing goes in as the dialogue. Task 11's customer says
+    "it is GV1N64" and gold's actions contain no read at all, so without it
+    `read_first` refuses gold's only write for lacking the sentence that was
+    withheld from it.
+
+    And the record each write names is read before the write is proposed. Task
+    14's gold cancels K1NW8N without a single lookup recorded, which no agent
+    could do -- it cannot know the reservation exists, let alone that the policy
+    permits cancelling it. `scripts/gate_bench.py --source key` supplies the same
+    read through `gate_gold.look_up`, and reports 0 blocks out of 49.
     """
     from tau2.domains.airline.environment import get_environment, get_tasks
 
@@ -68,17 +102,20 @@ def replayed():
         if not any(action.name in WRITES for action in actions):
             continue
         environment = get_environment()
-        observed = [str(task.user_scenario.instructions)]
+        instructions = str(task.user_scenario.instructions)
+        observed = [instructions]
+        dialogue = f"Customer: {instructions}"
         looked_up = []
         committed = []
         for action in actions:
             arguments = dict(action.arguments or {})
             if action.name in WRITES:
+                _read(environment, arguments.get("reservation_id"), observed, looked_up)
                 proposals.append(
                     (
                         task.id,
                         PendingCall(id="p", name=action.name, arguments=arguments),
-                        Evidence.of(list(observed), "", list(committed), list(looked_up)),
+                        Evidence.of(list(observed), dialogue, list(committed), list(looked_up)),
                     )
                 )
             try:

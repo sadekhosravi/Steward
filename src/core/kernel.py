@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal
 from uuid import uuid4
@@ -97,7 +97,7 @@ from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
 from core.state import Change, Demand, Deps, PendingCall, StewardState, Written, pruned
-from core.verifiers import Evidence, Panel, first
+from core.verifiers import Describe, Evidence, Panel, first
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -416,6 +416,8 @@ def _gate(
     gate: Agent[None, Verdict],
     gated: frozenset[str],
     panel: Panel | None = None,
+    selection: Panel | None = None,
+    describe: Describe | None = None,
 ) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
@@ -440,10 +442,40 @@ def _gate(
     # benchmark's answer key makes while stopping 21% of the ones it does not.
     # There is no configuration in which paying a model to reach a worse version
     # of the same answer is the better trade.
+    evidence = _evidence(state)
     for call in proposal:
         if call.name not in gated:
             continue
-        finding = first(call, _evidence(state), panel) if panel else None
+        finding = first(call, evidence, panel) if panel else None
+        if finding is not None:
+            return _refused(
+                state,
+                proposal,
+                writes,
+                finding.reason,
+                finding.remediation,
+                finding.recoverable,
+                deterministic=True,
+            )
+
+    # The checks that need a fact only the conversation holds. They are separated
+    # from the ones above by cost and nothing else: `describe` is a model call, so
+    # it is paid for only by proposals the free checks have already cleared, and
+    # only for tools that point at a record somebody could have described.
+    #
+    # The model produces the description; the comparison stays arithmetic and
+    # stays here. That split is why these count as deterministic refusals -- what
+    # blocks is still a verifier reading a record, and an extraction that fails
+    # comes back empty, which is silence rather than a refusal.
+    for call in proposal:
+        if call.name not in gated or not selection or not describe:
+            continue
+        if not selection.for_tool(call.name):
+            continue
+        stated = describe(call, evidence)
+        if not stated:
+            continue
+        finding = first(call, replace(evidence, stated=dict(stated)), selection)
         if finding is not None:
             return _refused(
                 state,
@@ -709,11 +741,26 @@ def build_graph(
     schemas: dict[str, dict[str, Any]],
     policy: str,
     panel: Panel,
+    selection: Panel | None = None,
+    describe: Describe | None = None,
 ) -> Any:
     graph = StateGraph(StewardState)
     graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant, schemas=schemas)))
-    graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated, panel=panel)))
+    graph.add_node(
+        "gate",
+        _traced(
+            "gate",
+            partial(
+                _gate,
+                gate=gate,
+                gated=gated,
+                panel=panel,
+                selection=selection,
+                describe=describe,
+            ),
+        ),
+    )
     graph.add_node("speak", _traced("speak", partial(_speak, speaker=speaker)))
     graph.add_node("act", _act)
     graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
@@ -772,6 +819,8 @@ class Kernel:
         speaker_model: str | Model | None = None,
         reference: str = "",
         panel: Panel | None = None,
+        selection: Panel | None = None,
+        describe: Describe | None = None,
     ):
         """`gate_model`, `planner_model` and `speaker_model` let the two critics and
         the planner run on a different model from the actor. All default to the
@@ -780,7 +829,13 @@ class Kernel:
 
         `reference` is domain knowledge the policy assumes and never states. The
         Kernel does not know what is in it and does not look: deciding that is the
-        adapter's job, which is what keeps `core` free of any one environment."""
+        adapter's job, which is what keeps `core` free of any one environment.
+
+        `selection` and `describe` are the second deterministic stage and go
+        together -- checks that need a fact only the customer's own words hold,
+        and the callable that extracts it. Pass neither and the stage does not
+        exist, which is how every test in this repo runs the gate without a
+        provider in reach."""
         self.graph = build_graph(
             build_assistant(tools, policy, model, reference),
             build_gate(policy, gate_model if gate_model is not None else model),
@@ -790,6 +845,8 @@ class Kernel:
             _schemas(tools),
             policy,
             panel or Panel(),
+            selection,
+            describe,
         )
 
     def new_thread(self) -> str:
