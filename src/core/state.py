@@ -223,7 +223,23 @@ class StewardState(BaseModel):
     """
 
     revisions: int = 0
-    """Blocked attempts so far this user turn. Bounds the correction loop."""
+    """Attempts the critic has blocked this user turn. Bounds the argument.
+
+    The critic's refusals and the verifiers' are counted apart because they mean
+    different things. A model that refused an action will refuse it again, so a
+    small budget is the right one: two rounds of arguing with it is generous. A
+    verifier states a fact about the record, and the actor's correct response to
+    it is usually not to retry at all but to go and do something else -- which
+    must not be paid for out of the argument budget."""
+
+    blocked: int = 0
+    """Attempts a verifier has stopped this user turn. Bounds the sieve.
+
+    One turn can legitimately spend many of these. Task 37's customer asks for
+    three reservations at once, two of which the policy forbids touching; task 41
+    names seven. Every forbidden one is a block, and the turn is going correctly
+    while they happen -- the actor is meant to work through them and complete the
+    requests that *are* allowed."""
 
     plan: str = ""
     """The planner's route for this turn, rewritten each time a lookup comes back.

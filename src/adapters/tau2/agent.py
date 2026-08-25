@@ -31,6 +31,7 @@ from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
 from adapters.tau2.totals import totals
+from adapters.tau2.verifiers import PANEL
 from core.kernel import Act, Kernel, Step
 
 
@@ -153,8 +154,17 @@ class StewardAgent(HalfDuplexAgent[AgentState]):
     ):
         super().__init__(tools=tools, domain_policy=domain_policy)
         declared = [_tool_def(t) for t in tools]
+        # The deterministic verifiers are handed in from here rather than reached
+        # for by the Kernel, for the same reason the policy and the tools are:
+        # knowing that a certificate is worth $100 a passenger for a cancelled
+        # flight is knowledge about an airline, and `core` has none.
         self.kernel = Kernel(
-            declared, domain_policy, model, gate_model, reference=reference(declared)
+            declared,
+            domain_policy,
+            model,
+            gate_model,
+            reference=reference(declared),
+            panel=PANEL,
         )
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:
