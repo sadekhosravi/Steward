@@ -34,6 +34,8 @@ not comparable to one that lost none.
 | arm C `stable_ef6cffd_50x3` | **stable `ef6cffd`: monolithic critic on, no sieve** | 3 | **0.493 ±0.030** | 0.500 | 0.360 | 0.300 | — | 150/150 |
 | arm B `ab_control_50x3` | **control: tau2's own `llm_agent`, no scaffold** | 3 | 0.433 ±0.026 | 0.460 | 0.320 | 0.300 | — | 149/150 |
 | arm A `ab_steward_50x3` | Part 4 sieve `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
+| cell 1 `gateoff_ef6cffd_50x3` | `ef6cffd` + `STEWARD_GATE=off`: nothing gating | 3 | 0.420 ±0.031 | 0.420 | 0.273 | 0.220 | — | 147/150 |
+| cell 2 `sievegate_73ad27f_50x3` | `73ad27f` + `STEWARD_GATE=on`: **sieve and critic together** | 3 | **0.500 ±0.027** | 0.500 | 0.393 | 0.340 | — | 150/150 |
 
 `speaker_49` started at 01:57 on 08-23 and the SPEAKER commit landed at 02:54, so
 either the name is aspirational or the work was in the tree uncommitted. Which one
@@ -78,6 +80,8 @@ four gold actions per trial-set out of the read column.
 | arm C `stable_ef6cffd_50x3` | **79/150 (53%)** | 134/150 (89%) | 218 | 155 (71%) | **63/150 (42%)** | **215/276 (78%)** |
 | arm B `ab_control_50x3` (control) | 70/150 (47%) | 131/150 (87%) | 264 | 251 (95%) | 13/150 (9%) | 167/275 (61%) |
 | arm A `ab_steward_50x3` | 75/150 (50%) | **136/150 (91%)** | 219 | 184 (84%) | 35/150 (23%) | 206/276 (75%) |
+| cell 1 `gateoff_ef6cffd_50x3` | 63/150 (42%) | 132/150 (88%) | 246 | 209 (85%) | 37/150 (25%) | **231/278 (83%)** |
+| cell 2 `sievegate_73ad27f_50x3` | 79/150 (53%) | **136/150 (91%)** | 196 | 159 (81%) | 37/150 (25%) | 218/279 (78%) |
 
 ## What the trend actually says
 
@@ -203,6 +207,59 @@ the gate cause this behaviour" is unanswerable from the artefacts on disk, which
 is why the 2x2 above has to be filled by running it rather than by re-reading it.
 Instrumenting this — a sidecar record of every proposal, verdict and reason —
 is the prerequisite for the next round of gate work.
+
+### Filling the 2x2: the sieve and the critic are not additive
+
+The three-arm experiment left one cell empty and could not attribute the Part 4
+regression. Two more runs, same conditions, close it.
+
+| | critic **off** | critic **on** |
+|---|---|---|
+| **sieve off** | **0.420** (cell 1) | **0.493** (arm C) |
+| **sieve on** | **0.487** (arm A) | **0.500** (cell 2) |
+
+Stock `llm_agent` scores 0.433 on the same grid. Cell 1's three simulations that
+never returned bound it between 0.420 and 0.440; the ordering holds at either.
+
+**Both mechanisms work, separately, and by about the same amount.** Against the
+bare scaffold: the critic is +0.073 ± 0.043 (1.7 SE, p ~ 0.09), the sieve
++0.067 ± 0.037 (1.8 SE, p ~ 0.07). These are the two closest-to-significant
+results this project has produced. They also correct an earlier claim in this
+file: the `b653227` pair that put gate-on and gate-off both at 0.420 was a
+single-trial coincidence, not evidence the critic was inert.
+
+**Together they are not additive.** Additive would predict 0.560; cell 2 measures
+0.500, so the interaction term is **-0.060** -- the second mechanism cancels
+almost exactly one of the first. Cell 2 beats arm C by +0.007 (0.2 SE), which is
+nothing, and beats the bare scaffold by +0.070 (1.9 SE, p ~ 0.058).
+
+**They reach the same score by opposite routes, and the routes collide.**
+
+| | gold write | under-wrote | full recall + surplus | lost to surplus | no-write tasks |
+|---|---|---|---|---|---|
+| cell 2 sieve+critic | 25.2% | 37 | **15** | **10** | **0.875** |
+| arm C critic only | **42.9%** | 25 | 21 | 16 | 0.792 |
+| arm A sieve only | 23.8% | 44 | 17 | 13 | 0.847 |
+| cell 1 nothing on | 25.3% | 33 | 31 | 26 | 0.700 |
+
+The critic converts by doing *more correct work* -- gold-write recall 25.3% ->
+42.9%, transfer 48.3% -> 34.0%. The sieve converts by doing *less wrong work* --
+recall flat, transfer up to 60.7%, surplus 31 -> 17. Run together, cell 2 keeps
+the sieve's surplus control (best of any cell, only 0.033 recoverable) and loses
+the critic's recall entirely (25.2%, the bare scaffold's number).
+
+**The cause is ordering, and it is visible in the code.** `kernel._gate` runs the
+deterministic panel first and returns `_refused` the moment a verifier fires, so
+the critic only ever sees proposals the sieve has already cleared. The sieve
+pre-empts the critic on exactly the proposals where the critic was earning its
++0.073.
+
+**What this says to do:** ship the critic alone -- the `ef6cffd` configuration on
+`main`. The sieve's verifiers are not wrong (cell 2 has the lowest surplus of any
+configuration measured); they are wired to fire instead of inform. Making the
+panel advisory, so what it finds becomes evidence the critic rules on rather than
+a block that pre-empts it, is a `kernel._gate` change and the obvious next
+experiment.
 
 ### A note on the Pass^k columns
 
