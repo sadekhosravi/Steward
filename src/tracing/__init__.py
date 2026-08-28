@@ -76,7 +76,15 @@ def setup(client: Langfuse | None = None) -> bool:
         if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
             return False
         client = get_client()
-        if not client.auth_check():
+        # `auth_check` reaches the network, so it fails the way the network does
+        # rather than by returning False -- a self-hosted Langfuse that is simply
+        # not running raises `ConnectError` out of httpx. This function promises
+        # never to raise and a run must not be lost to its own instrumentation, so
+        # anything that comes back from that call means tracing is off.
+        try:
+            if not client.auth_check():
+                return False
+        except Exception:
             return False
 
     from pydantic_ai import Agent
