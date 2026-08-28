@@ -146,3 +146,15 @@ def test_tau2_no_longer_tells_the_model_to_transfer_when_it_is_stuck():
     assert "cannot solve" in (AirlineTools.transfer_to_human_agents.__doc__ or "")
     assert "cannot solve" not in description(transfer_to_human_agents)
     assert "last resort" in description(transfer_to_human_agents)
+
+
+def test_the_status_tool_says_what_it_does_not_return():
+    """The one read whose return type carries no fields, and so the one the
+    generated sentence cannot help. Task 44 called it five times looking for
+    departure times, decided no tool had them, and transferred."""
+    from tau2.domains.airline.environment import get_environment
+
+    status = next(t for t in get_environment().get_tools() if t.name == "get_flight_status")
+    said = description(status)
+    assert "no times" in said
+    assert "search_direct_flight" in said

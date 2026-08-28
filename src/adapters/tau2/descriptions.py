@@ -37,7 +37,28 @@ __all__ = ["describe"]
 # description sits next to the tool the model is about to reach for, so it argues
 # with the system prompt from closer range and tends to win. Ours states the same
 # rule the gate enforces, so the two stop contradicting each other.
+# `get_flight_status` returns `str` -- one word, `available` or `delayed` or
+# `cancelled`, and nothing else. It is the only read in this domain whose return
+# type carries no fields, so it is also the only one `_returns` has nothing to say
+# about, and "Get the status of a flight" on its own reads like an offer to
+# describe the flight. Task 44 accepted that offer: it called this five times
+# looking for departure and arrival times, concluded that no tool in the system
+# has them, and transferred -- while `search_direct_flight` was returning
+# `scheduled_departure_time_est` in its own description all along.
+#
+# So this says what does not come back as plainly as what does, and names where
+# to go instead. The same repair as the one above the class: an agent cannot see
+# a return value without first making a call it has already talked itself out of.
 _OVERRIDES = {
+    "get_flight_status": (
+        "Get whether a flight is available, delayed or cancelled on a date. Returns "
+        "that one word and nothing else -- no times, no price, no seats. For "
+        "departure and arrival times, the price, or the seats left, use "
+        "search_direct_flight or search_onestop_flight, which return "
+        "scheduled_departure_time_est and scheduled_arrival_time_est for the route "
+        "and date. For the flights on a booking the customer already holds, use "
+        "get_reservation_details."
+    ),
     "transfer_to_human_agents": (
         "Hand the conversation to a human agent. This ends the conversation, and "
         "everything still outstanding is left undone, so it is a last resort. Use it "
