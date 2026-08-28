@@ -17,6 +17,16 @@ import tracing
 from tests.test_gate import approves, blocks_once, kernel, proposes_a_cancellation
 
 
+@pytest.fixture
+def critic_on(monkeypatch):
+    """The critic is off by default -- measured, see `kernel._reviewing`. The
+    tests here that hand in a refusing stand-in are about what it does when it is
+    asked, so they ask for it explicitly."""
+    from core import kernel as _kernel_module
+
+    monkeypatch.setattr(_kernel_module, "REVIEWING", True)
+
+
 @pytest.fixture(scope="module")
 def exporter():
     """One client for the module: Langfuse installs a tracer provider, and a
@@ -84,7 +94,7 @@ def test_the_planners_own_model_call_is_instrumented(spans):
     assert generations
 
 
-def test_the_gate_span_carries_the_verdict(spans):
+def test_the_gate_span_carries_the_verdict(critic_on, spans):
     """Run 002 could only estimate the block rate from how many writes came out
     the other side. A refusal now says so, in the place it was made."""
     kernel(proposes_a_cancellation, blocks_once()).send("t", "cancel HKD3PS")

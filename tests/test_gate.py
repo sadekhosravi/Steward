@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -39,9 +40,30 @@ from agents.gate import (
     review,
     transcript,
 )
+from core import kernel as _kernel_module
 from core.kernel import REVISION_LIMIT, Act, Kernel, Say
 from core.state import Change, Demand, PendingCall, _windows, mispriced
 from tests.tools import CANCEL, LOOKUP, PLANNER
+
+
+@pytest.fixture(autouse=True)
+def critic_on(monkeypatch):
+    """The critic is off by default -- measured, see `kernel._reviewing`. Every
+    test below is about what it does when it is asked, so every one of them asks.
+
+    Set on the module constant rather than the environment because the constant
+    is read once at import: a run must not change its mind half way through, and
+    that is the property being preserved, not worked around. The three tests that
+    are about the switch itself opt out with `no_critic`.
+    """
+    monkeypatch.setattr(_kernel_module, "REVIEWING", True)
+
+
+@pytest.fixture
+def no_critic(monkeypatch):
+    """The default arm: the critic is never consulted."""
+    monkeypatch.setattr(_kernel_module, "REVIEWING", False)
+
 
 SEEN_ID = "HKD3PS"
 INVENTED_ID = "H0000X"
@@ -832,7 +854,7 @@ def test_the_critic_can_be_taken_out_without_taking_the_ledger_with_it(monkeypat
     def never(*args, **kwargs):
         raise AssertionError("the critic was asked despite being turned off")
 
-    monkeypatch.setattr(kernel, "REVIEWING", False)
+    monkeypatch.setattr(_kernel_module, "REVIEWING", False)
     monkeypatch.setattr(kernel, "decide", never)
 
     out = kernel._gate(state, None, frozenset({"book_reservation"}))
@@ -849,7 +871,7 @@ def test_a_read_only_step_still_writes_nothing_to_the_ledger_either_way(monkeypa
     from core.state import StewardState
 
     state = StewardState(calls=[{"id": "1", "name": "get_user_details", "arguments": {}}])
-    monkeypatch.setattr(kernel, "REVIEWING", False)
+    monkeypatch.setattr(_kernel_module, "REVIEWING", False)
 
     out = kernel._gate(state, None, frozenset({"book_reservation"}))
 
@@ -864,13 +886,13 @@ def test_the_switch_is_off_only_when_asked(monkeypatch):
     from core import kernel
 
     for value, expected in (
-        ("off", False),
-        ("OFF", False),
-        (" off ", False),
         ("on", True),
-        ("", True),
+        ("ON", True),
+        (" on ", True),
+        ("off", False),
+        ("", False),
     ):
         monkeypatch.setenv("STEWARD_GATE", value)
         assert kernel._reviewing() is expected
     monkeypatch.delenv("STEWARD_GATE")
-    assert kernel._reviewing() is True
+    assert kernel._reviewing() is False

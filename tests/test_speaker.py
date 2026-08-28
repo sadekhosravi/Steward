@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -29,6 +30,16 @@ from tests.tools import CANCEL, LOOKUP
 
 SEEN_ID = "HKD3PS"
 CHANGE = Change(tool="cancel_reservation", record=SEEN_ID, what="cancel the booking")
+
+
+@pytest.fixture
+def critic_on(monkeypatch):
+    """The critic is off by default -- measured, see `kernel._reviewing`. The
+    tests here that hand in a refusing stand-in are about what it does when it is
+    asked, so they ask for it explicitly."""
+    from core import kernel as _kernel_module
+
+    monkeypatch.setattr(_kernel_module, "REVIEWING", True)
 
 
 # --- scripted models --------------------------------------------------------
@@ -297,7 +308,7 @@ def test_a_check_that_never_answers_lets_the_message_through():
 # --- where it does not sit --------------------------------------------------
 
 
-def test_an_escalated_turn_bypasses_the_speaker():
+def test_an_escalated_turn_bypasses_the_speaker(critic_on):
     """Escalation exists to end a turn the gate would not let continue. A check whose
     only power is to send the actor back to work has nothing to say about it, and
     holding that reply would loop the turn between the two things that stop it."""
@@ -428,7 +439,7 @@ def test_a_reply_after_a_fixable_refusal_is_held_without_asking_the_speaker():
     assert consulted == []
 
 
-def test_the_held_reply_is_counted_like_any_other_hold():
+def test_the_held_reply_is_counted_like_any_other_hold(critic_on):
     """It bypasses the model, not the instruments. A hold nobody can count is the
     hole the gate had, and skipping the counters would dig it again."""
     k = kernel(

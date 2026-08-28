@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal
 from uuid import uuid4
@@ -80,18 +80,24 @@ from pydantic_ai import (
     ModelRetry,
     UnexpectedModelBehavior,
 )
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.tools import ToolDefinition
 from pydantic_core import to_jsonable_python
 
 import tracing
 from agents.assistant import Assistant, build_assistant
-from agents.gate import Verdict, build_gate, decide, review
+from agents.gate import Verdict, build_gate, decide, review, transcript
 from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
 from core.state import Change, Demand, Deps, PendingCall, StewardState, Written, pruned
+from core.verifiers import Describe, Evidence, Panel, first
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -99,12 +105,29 @@ __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 # cut a long-but-legitimate investigation short and score it as a failure.
 RECURSION_LIMIT = 100
 
-# Blocked write attempts allowed per user turn before the actor has to stop and
-# talk to the customer. Counted per turn rather than per action, so no
-# arrangement of reads and writes lets the loop run forever: the baseline
-# produced four simulations that never terminated, and an unbounded correction
-# loop is the obvious way to produce more.
+# Critic refusals allowed per user turn before the actor has to stop and talk to
+# the customer. Counted per turn rather than per action, so no arrangement of
+# reads and writes lets the loop run forever: the baseline produced four
+# simulations that never terminated, and an unbounded correction loop is the
+# obvious way to produce more.
+#
+# Small on purpose. This budget buys rounds of arguing with a model that has
+# already said no, and a 20B critic asked the same question twice answers it the
+# same way.
 REVISION_LIMIT = 2
+
+# Verifier refusals allowed per user turn, kept apart from the budget above and
+# far larger, because the two are not the same event.
+#
+# A verifier reports a fact about a record -- this leg has flown, this cabin
+# cannot be changed -- and the actor's right answer is usually to leave that
+# record alone and get on with the rest of the request. That is the turn going
+# *well*. Charging it against the argument budget makes a customer with several
+# reservations progressively harder to serve, and the customers who need this
+# most are exactly the ones with several: task 37 names three reservations and
+# forbids two of them, task 41 names seven. The ceiling is the number of records
+# a customer can plausibly hold, so that no legitimate request can exhaust it.
+BLOCK_LIMIT = 8
 
 # Replies held per user turn before the actor is allowed to speak regardless.
 # Lower than the gate's budget on purpose: a held reply costs a whole assistant
@@ -120,18 +143,31 @@ DEFERRAL_LIMIT = 1
 REPLAN_LIMIT = 3
 
 
-# A measurement arm, not a mode. `STEWARD_GATE=off` approves every proposal
-# without asking the critic and leaves everything else exactly where it was --
-# the plan, the written ledger, the demands, the speaker. That isolates the one
-# thing under suspicion. On the 50-task run the critic refused fourteen writes
-# that were byte-identical to a gold action, gave opposite verdicts on the same
-# proposal 22 times across 17 of 50 tasks, and on five of the seven tasks that
-# wrote when they should not have it refused first and approved later. Whether
-# it pays for itself is a question the code cannot answer, so this is how it gets
-# asked. Read once at import: a run does not change its mind half way through.
+# The critic is off by default, and the reason is cost rather than harm.
+#
+# Two 50-task arms differing only in this flag came out at 0.438 with it and
+# 0.417 without. Then the same configuration was run twice: 0.440 and 0.420. The
+# gap between the arms is the gap between two runs of one arm, so this benchmark
+# at one trial per task cannot see a difference of that size -- 15 of 50 tasks
+# flip between zero and non-zero between identical runs, and gold write recall
+# came out 14/48 and 25/49 on the same settings. Any per-task or per-write
+# reading of a single pair of runs is noise. Several were made before that was
+# measured; they were wrong.
+#
+# What survives is not statistical. The critic is a model call on every proposed
+# write, and it costs roughly threefold in wall clock -- fifty tasks in 23
+# minutes without it against 75 minutes and unfinished with it. A component that
+# cannot be shown to change the score and triples the time to find that out is
+# not one to leave on by default.
+#
+# So it is kept and not deleted: nothing here says the critic is bad, only that
+# this measurement cannot see what it does. Settling that needs several trials a
+# task. The machinery it hangs on -- the ledger, the revision path, the demands
+# -- is what the speaker is built on. `STEWARD_GATE=on` asks for it back.
+# Read once at import: a run does not change its mind half way through.
 def _reviewing() -> bool:
-    """Whether the critic is consulted at all. `STEWARD_GATE=off` turns it off."""
-    return os.environ.get("STEWARD_GATE", "on").strip().lower() != "off"
+    """Whether the critic is consulted at all. `STEWARD_GATE=on` turns it on."""
+    return os.environ.get("STEWARD_GATE", "off").strip().lower() == "on"
 
 
 REVIEWING = _reviewing()
@@ -375,7 +411,14 @@ def _approved(
     }
 
 
-def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]) -> dict[str, Any]:
+def _gate(
+    state: StewardState,
+    gate: Agent[None, Verdict],
+    gated: frozenset[str],
+    panel: Panel | None = None,
+    selection: Panel | None = None,
+    describe: Describe | None = None,
+) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
     A step of pure lookups is approved without a model call: reads cannot damage
@@ -392,6 +435,58 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     writes = [call.name for call in proposal if call.name in gated]
     if not writes:
         return {"approved": state.calls, "calls": []}
+
+    # The deterministic checks run first and run always, whether or not the critic
+    # is switched on. They cost nothing, they cannot be argued out of an answer,
+    # and measured over 247 real proposals they refuse none of the 49 writes the
+    # benchmark's answer key makes while stopping 21% of the ones it does not.
+    # There is no configuration in which paying a model to reach a worse version
+    # of the same answer is the better trade.
+    evidence = _evidence(state)
+    for call in proposal:
+        if call.name not in gated:
+            continue
+        finding = first(call, evidence, panel) if panel else None
+        if finding is not None:
+            return _refused(
+                state,
+                proposal,
+                writes,
+                finding.reason,
+                finding.remediation,
+                finding.recoverable,
+                deterministic=True,
+            )
+
+    # The checks that need a fact only the conversation holds. They are separated
+    # from the ones above by cost and nothing else: `describe` is a model call, so
+    # it is paid for only by proposals the free checks have already cleared, and
+    # only for tools that point at a record somebody could have described.
+    #
+    # The model produces the description; the comparison stays arithmetic and
+    # stays here. That split is why these count as deterministic refusals -- what
+    # blocks is still a verifier reading a record, and an extraction that fails
+    # comes back empty, which is silence rather than a refusal.
+    for call in proposal:
+        if call.name not in gated or not selection or not describe:
+            continue
+        if not selection.for_tool(call.name):
+            continue
+        stated = describe(call, evidence)
+        if not stated:
+            continue
+        finding = first(call, replace(evidence, stated=dict(stated)), selection)
+        if finding is not None:
+            return _refused(
+                state,
+                proposal,
+                writes,
+                finding.reason,
+                finding.remediation,
+                finding.recoverable,
+                deterministic=True,
+            )
+
     if not REVIEWING:
         return _approved(state, proposal, gated)
 
@@ -417,21 +512,74 @@ def _gate(state: StewardState, gate: Agent[None, Verdict], gated: frozenset[str]
     )
     if verdict.allowed:
         return _approved(state, proposal, gated)
+    return _refused(
+        state, proposal, writes, verdict.reason, verdict.remediation, verdict.recoverable
+    )
 
-    message = DENIAL.format(reason=verdict.reason, remediation=verdict.remediation)
-    if verdict.recoverable:
+
+def _evidence(state: StewardState) -> Evidence:
+    """What the verifiers are allowed to read, assembled from the turn's state.
+
+    `looked_up` is rebuilt by pairing each tool call with the result that came
+    back for it. The pairing cannot be skipped: this domain answers
+    `get_flight_status` with the bare word "delayed" and no flight attached, so a
+    result without its question is unreadable.
+    """
+    calls: dict[str, tuple[str, dict[str, Any]]] = {}
+    looked_up: list[tuple[str, dict[str, Any], str]] = []
+    for message in _history(state):
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                calls[part.tool_call_id] = (part.tool_name, part.args_as_dict())
+            elif isinstance(part, ToolReturnPart) and part.tool_call_id in calls:
+                name, arguments = calls[part.tool_call_id]
+                looked_up.append((name, arguments, str(part.content)))
+    return Evidence.of(
+        state.observed,
+        transcript(_history(state)),
+        [written.tool for written in state.written],
+        looked_up,
+    )
+
+
+def _refused(
+    state: StewardState,
+    proposal: list[PendingCall],
+    writes: list[str],
+    reason: str,
+    remediation: str,
+    recoverable: bool,
+    deterministic: bool = False,
+) -> dict[str, Any]:
+    """The step is stopped, in the one shape the rest of the graph understands.
+
+    Shared by the verifiers and the critic so a refusal reaching the actor is the
+    same object whichever decided it -- the same retry prompt, the same demand
+    recorded. A verifier whose refusals looked different would be a second
+    protocol to keep in step with this one.
+
+    One thing does differ, and it is the budget the refusal is charged to.
+    `deterministic` says the answer came from arithmetic over the record rather
+    than from a model's opinion, and those are spent against `blocked` instead of
+    `revisions` -- see the two limits for why they cannot share.
+    """
+    message = DENIAL.format(reason=reason, remediation=remediation)
+    if recoverable:
         message = f"{message}{SELF_FIX}"
+    counted = (
+        {"blocked": state.blocked + 1} if deterministic else {"revisions": state.revisions + 1}
+    )
     return {
+        **counted,
         "approved": [],
         "calls": [],
         "denied": {call.id: message for call in proposal},
-        "revisions": state.revisions + 1,
-        "demanded": _remember(state.demanded, writes, verdict.reason, state.turns),
+        "demanded": _remember(state.demanded, writes, reason, state.turns),
         # Only a fix the assistant can carry out alone. A refusal waiting on the
         # customer is not something to send it back over -- that is the turn
         # ending correctly, and holding the reply would loop it against a
         # condition only the customer can clear.
-        "fixable": verdict.remediation if verdict.recoverable else "",
+        "fixable": remediation if recoverable else "",
     }
 
 
@@ -552,10 +700,17 @@ def _route_speak(state: StewardState) -> Literal["think", "__end__"]:
 
 
 def _route_gate(state: StewardState) -> Literal["act", "think", "escalate"]:
-    """Approved work is emitted; a refusal goes back for a rewrite, until it cannot."""
+    """Approved work is emitted; a refusal goes back for a rewrite, until it cannot.
+
+    Either budget can end the turn on its own. They are checked separately rather
+    than summed because a turn that spent six verifier blocks and no critic
+    refusals has not been arguing -- it has been told six times that a record is
+    off limits, and it may still have work it is allowed to do.
+    """
     if state.approved:
         return "act"
-    return "think" if state.revisions <= REVISION_LIMIT else "escalate"
+    spent = state.revisions > REVISION_LIMIT or state.blocked > BLOCK_LIMIT
+    return "escalate" if spent else "think"
 
 
 def _traced(name: str, node: Callable[[StewardState], dict[str, Any]]):
@@ -585,11 +740,27 @@ def build_graph(
     gated: frozenset[str],
     schemas: dict[str, dict[str, Any]],
     policy: str,
+    panel: Panel,
+    selection: Panel | None = None,
+    describe: Describe | None = None,
 ) -> Any:
     graph = StateGraph(StewardState)
     graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant, schemas=schemas)))
-    graph.add_node("gate", _traced("gate", partial(_gate, gate=gate, gated=gated)))
+    graph.add_node(
+        "gate",
+        _traced(
+            "gate",
+            partial(
+                _gate,
+                gate=gate,
+                gated=gated,
+                panel=panel,
+                selection=selection,
+                describe=describe,
+            ),
+        ),
+    )
     graph.add_node("speak", _traced("speak", partial(_speak, speaker=speaker)))
     graph.add_node("act", _act)
     graph.add_node("escalate", _traced("escalate", partial(_escalate, assistant=assistant)))
@@ -647,6 +818,9 @@ class Kernel:
         planner_model: str | Model | None = None,
         speaker_model: str | Model | None = None,
         reference: str = "",
+        panel: Panel | None = None,
+        selection: Panel | None = None,
+        describe: Describe | None = None,
     ):
         """`gate_model`, `planner_model` and `speaker_model` let the two critics and
         the planner run on a different model from the actor. All default to the
@@ -655,7 +829,13 @@ class Kernel:
 
         `reference` is domain knowledge the policy assumes and never states. The
         Kernel does not know what is in it and does not look: deciding that is the
-        adapter's job, which is what keeps `core` free of any one environment."""
+        adapter's job, which is what keeps `core` free of any one environment.
+
+        `selection` and `describe` are the second deterministic stage and go
+        together -- checks that need a fact only the customer's own words hold,
+        and the callable that extracts it. Pass neither and the stage does not
+        exist, which is how every test in this repo runs the gate without a
+        provider in reach."""
         self.graph = build_graph(
             build_assistant(tools, policy, model, reference),
             build_gate(policy, gate_model if gate_model is not None else model),
@@ -664,6 +844,9 @@ class Kernel:
             _gated(tools),
             _schemas(tools),
             policy,
+            panel or Panel(),
+            selection,
+            describe,
         )
 
     def new_thread(self) -> str:
@@ -691,6 +874,7 @@ class Kernel:
             {
                 "prompt": text,
                 "revisions": 0,
+                "blocked": 0,
                 "deferrals": 0,
                 "replans": 0,
                 "sections": [],
