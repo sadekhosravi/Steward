@@ -36,10 +36,13 @@ from typing import Any
 
 from langfuse import Langfuse, get_client, propagate_attributes
 
+from . import journal
+
 __all__ = [
     "BULK",
     "enabled",
     "flush",
+    "journal",
     "label",
     "session",
     "setup",
@@ -103,11 +106,27 @@ def label(**metadata: str | None) -> None:
     _labels.update({key: value for key, value in metadata.items() if value})
 
 
-class _Ignored:
-    """Stands in for a span when tracing is off, and answers to the same calls."""
+class _Watched:
+    """The object a call site attaches its output to.
+
+    It stands in for a Langfuse observation when tracing is off, and it wraps one
+    when tracing is on. Either way it accumulates the node's input and output and
+    hands them to `journal` as it closes -- which is what lets the two sinks be
+    switched on independently. Langfuse is for reading one conversation; the
+    journal is for counting across two hundred. Neither is a substitute.
+    """
+
+    def __init__(self, name: str, input: dict[str, Any], inner: Any = None) -> None:
+        self._line: dict[str, Any] = {"node": name, "input": input}
+        self._inner = inner
 
     def update(self, **attributes: Any) -> None:
-        pass
+        if self._inner is not None:
+            self._inner.update(**attributes)
+        self._line.update(attributes)
+
+    def close(self) -> None:
+        journal.record(self._line)
 
 
 @contextmanager
@@ -118,26 +137,41 @@ def span(name: str, **input: Any) -> Iterator[Any]:
     tracing is off it yields a stand-in, so the call sites read the same either
     way and carry no `if enabled()` branches.
     """
+    payload = visible(input)
     if _client is None:
-        yield _Ignored()
+        watched = _Watched(name, payload)
+        try:
+            yield watched
+        finally:
+            watched.close()
         return
-    with _client.start_as_current_observation(name=name, input=visible(input)) as observation:
-        yield observation
+    with _client.start_as_current_observation(name=name, input=payload) as observation:
+        watched = _Watched(name, payload, observation)
+        try:
+            yield watched
+        finally:
+            watched.close()
 
 
 @contextmanager
 def session(thread: str) -> Iterator[None]:
     """Group the traces of one conversation. Enter this *before* the root span:
-    session is a property of the trace, and the trace is opened by that span."""
-    if _client is None:
-        yield
-        return
-    with propagate_attributes(
-        session_id=thread,
-        metadata=_labels or None,
-        tags=sorted(_labels.values()) or None,
-    ):
-        yield
+    session is a property of the trace, and the trace is opened by that span.
+
+    The journal is entered here too, and unconditionally: it needs the same
+    grouping, and a line that cannot say which conversation it came from is not
+    worth writing.
+    """
+    with journal.session(thread):
+        if _client is None:
+            yield
+            return
+        with propagate_attributes(
+            session_id=thread,
+            metadata=_labels or None,
+            tags=sorted(_labels.values()) or None,
+        ):
+            yield
 
 
 def visible(payload: dict[str, Any]) -> dict[str, Any]:
@@ -158,8 +192,9 @@ def flush() -> None:
 
 
 def shutdown() -> None:
-    """Flush, stop the exporter, and leave tracing off. Idempotent."""
+    """Flush, stop the exporter, close the journal, and leave tracing off. Idempotent."""
     global _client
+    journal.shut()
     if _client is None:
         return
     from pydantic_ai import Agent

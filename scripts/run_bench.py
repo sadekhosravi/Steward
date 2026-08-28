@@ -65,6 +65,13 @@ if __name__ == "__main__":
             run=(_flag("--save-to") or "").split("/")[-1].removesuffix(".json") or None,
         )
     print(f"Langfuse tracing: {'on' if on else 'off'}")
+    # The other sink, and the one the offline measurements read. Langfuse answers
+    # "what happened in this conversation"; the journal answers "how often, across
+    # the whole run" -- and a refused proposal never becomes a tool call, so it is
+    # absent from the saved trajectories entirely. Off unless STEWARD_JOURNAL
+    # names a path.
+    kept = tracing.journal.open_from_env()
+    print(f"Decision journal: {os.environ['STEWARD_JOURNAL'] if kept else 'off'}")
     try:
         sys.exit(main())
     finally:
