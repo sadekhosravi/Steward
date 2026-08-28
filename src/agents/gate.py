@@ -60,7 +60,16 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import Model
 
 import llm
-from core.state import Change, Demand, PendingCall, duplicated, mispriced, sources, ungrounded
+from core.state import (
+    Change,
+    Consent,
+    Demand,
+    PendingCall,
+    duplicated,
+    mispriced,
+    sources,
+    ungrounded,
+)
 from workflows import for_policy
 
 __all__ = [
@@ -355,6 +364,9 @@ WHERE EACH IDENTIFIER CAME FROM
 WHAT YOU ALREADY REQUIRED
 {demands}
 
+WHAT THE CUSTOMER HAS AGREED TO
+{consents}
+
 WHAT THIS TURN STILL OWES
 {owed}
 """.strip()
@@ -374,6 +386,18 @@ NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the 
 NO_PROVENANCE = "The proposed action carries no identifiers."
 
 NO_DEMANDS = "Nothing. You have not refused any of these actions before."
+
+NO_CONSENTS = "Nothing recorded. Read the conversation above to see what was agreed."
+
+# The demand and its answer, side by side, as two facts rather than as a
+# transcript to be re-read. `words` is quoted verbatim: a paraphrase of a consent
+# is the one thing nobody should be asked to trust, and the whole failure this
+# addresses is the gate re-deriving an answer it had already been given.
+CONSENT = (
+    "You required, before {action}: {reason}\n"
+    "  The customer answered on turn {turn}, saying: {words!r}\n"
+    "  That condition is met. Do not require it again."
+)
 
 NOTHING_OWED = "Nothing. Every change this turn was planned to make has been approved."
 
@@ -515,6 +539,7 @@ def review(
     observed: list[str],
     demanded: list[Demand] | None = None,
     turn: int = 0,
+    consented: list[Consent] | None = None,
     owed: list[Change] | None = None,
 ) -> str:
     """The case put to the gate: what happened, what is proposed, what looks off,
@@ -534,6 +559,7 @@ def review(
         findings=findings(proposal, observed),
         provenance=provenance(proposal, observed),
         demands=demands(proposal, demanded or [], turn),
+        consents=consents(proposal, consented or []),
         owed="\n".join(f"- {c.key}: {c.what}".rstrip(": ") for c in owed) if owed else NOTHING_OWED,
     )
 
@@ -611,6 +637,32 @@ def demands(proposal: list[PendingCall], demanded: list[Demand], turn: int) -> s
         if demand.action in proposed and turn > demand.turn
     ]
     return "\n".join(f"- {line}" for line in lines) if lines else NO_DEMANDS
+
+
+def consents(proposal: list[PendingCall], consented: list[Consent]) -> str:
+    """What the customer has already agreed to, for the actions being proposed.
+
+    The other half of `demands`. That one stops the gate forgetting it asked; this
+    one stops it forgetting it was answered -- 70 of the 166 write refusals in the
+    50-task run were a condition re-imposed after the customer had met it, and the
+    gate had no way to know except by re-reading a transcript it reads badly.
+
+    Filtered to the proposal for the same reason `demands` is: an agreement about
+    a different action is not evidence about this one, and a list of everything
+    the customer has ever said yes to is a list the gate will misapply.
+    """
+    proposed = {call.name for call in proposal}
+    lines = [
+        CONSENT.format(
+            action=consent.action,
+            reason=" ".join(consent.reason.split()),
+            turn=consent.turn,
+            words=" ".join(consent.words.split()),
+        )
+        for consent in consented
+        if consent.action in proposed
+    ]
+    return "\n".join(f"- {line}" for line in lines) if lines else NO_CONSENTS
 
 
 def transcript(messages: list[ModelMessage]) -> str:

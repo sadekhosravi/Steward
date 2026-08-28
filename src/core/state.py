@@ -22,18 +22,21 @@ from __future__ import annotations
 
 import json
 import operator
+import re
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
 __all__ = [
     "Change",
+    "Consent",
     "Demand",
     "Deps",
     "StewardState",
     "Obligation",
     "PendingCall",
     "Written",
+    "answered",
     "duplicated",
     "invented",
     "mispriced",
@@ -108,6 +111,36 @@ class Demand(BaseModel):
     turn: int
     """Which user turn imposed it. The gate compares this against the current turn
     to know whether the customer has had a chance to answer."""
+
+
+class Consent(BaseModel):
+    """The customer's own agreement to something the gate required, kept verbatim.
+
+    The gate has no memory, so a condition it imposed one turn ago has to be
+    re-derived from prose every time -- and 70 of the 166 write refusals in the
+    50-task run were the same demand made again after the customer had already
+    answered it. `Demand` fixed half of that by reminding the gate what it had
+    asked. This is the other half: recording that the question came back answered,
+    so the gate is reading a fact rather than re-reading a transcript.
+
+    Evidence, never an approval. Nothing here lets a call through -- the gate still
+    rules on every proposal, and all this changes is what it knows while ruling.
+    The customer grants the permission; we only write it down.
+    """
+
+    action: str
+    """The tool the demand was about, and so the tool this agreement covers."""
+
+    reason: str
+    """What the gate had required, verbatim, so the agreement stays attached to the
+    question it answers."""
+
+    words: str
+    """What the customer actually said. Kept literally because a paraphrase of a
+    consent is the one thing nobody should be asked to trust."""
+
+    turn: int
+    """The user turn that gave it."""
 
 
 class Obligation(BaseModel):
@@ -342,6 +375,13 @@ class StewardState(BaseModel):
     Kept for the whole conversation, not the turn: the point of it is that the
     customer answers on a *later* turn than the one that asked."""
 
+    consented: list[Consent] = Field(default_factory=list)
+    """Demands the customer has since answered, latest per action.
+
+    A demand leaves `demanded` only by arriving here, so the two lists never both
+    describe the same action and the gate is never shown a standing condition and
+    its answer at the same time."""
+
     fixable: str = ""
     """The remediation from the last refusal the assistant could carry out itself.
 
@@ -397,6 +437,99 @@ def invented(arguments: dict[str, Any], observed: list[str]) -> list[str]:
     """
     corpus = "\n".join(observed)
     return [path for path, value in _identifiers(arguments) if value not in corpus]
+
+
+# What counts as the customer saying yes. Deliberately short and deliberately
+# literal: the cost of missing an agreement is one wasted turn, and the cost of
+# inventing one is a write nobody asked for, so anything that has to be
+# interpreted is left to the gate rather than decided here.
+AGREED = (
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "sure",
+    "ok",
+    "okay",
+    "confirm",
+    "confirmed",
+    "agree",
+    "agreed",
+    "proceed",
+    "please do",
+    "go ahead",
+    "do it",
+    "sounds good",
+    "that works",
+    "correct",
+)
+
+# Any of these and the message is not treated as agreement, whatever else is in
+# it. "Yes, but not that one" and "yes -- wait" are the sentences this exists for.
+REFUSED = (
+    "no",
+    "not",
+    "don't",
+    "do not",
+    "dont",
+    "wait",
+    "hold on",
+    "hold off",
+    "stop",
+    "instead",
+    "actually",
+    "but",
+    "however",
+    "cancel that",
+    "never mind",
+    "nevermind",
+)
+
+
+def answered(demanded: list[Demand], reply: str, turn: int) -> tuple[list[Demand], list[Consent]]:
+    """Move every demand this message answers out of `demanded` and into consent.
+
+    Returns both lists so the caller writes them together: a demand that has been
+    answered and a demand that is still standing are the same object in different
+    places, and updating one without the other is how the gate ends up shown both.
+
+    Only demands from an *earlier* turn are eligible. One made during the turn in
+    progress has not been put to the customer yet, so a "yes" in the message that
+    provoked it is agreement to something else.
+
+    The test is a word match, not a judgement. It is one-sided on purpose: an
+    unrecognised agreement leaves the demand standing and costs a turn, while a
+    misread one would record a permission the customer never gave. So a message
+    carrying any hesitation at all is treated as no answer, and the gate goes on
+    reading the transcript itself.
+    """
+    if not _agrees(reply):
+        return list(demanded), []
+    standing = [demand for demand in demanded if demand.turn >= turn]
+    given = [
+        Consent(action=demand.action, reason=demand.reason, words=reply.strip(), turn=turn)
+        for demand in demanded
+        if demand.turn < turn
+    ]
+    return standing, given
+
+
+def _agrees(reply: str) -> bool:
+    """Whether this message is an unqualified yes."""
+    words = re.findall(r"[a-z']+", reply.lower())
+    if not words:
+        return False
+    text = " ".join(words)
+    if any(_says(text, words, phrase) for phrase in REFUSED):
+        return False
+    return any(_says(text, words, phrase) for phrase in AGREED)
+
+
+def _says(text: str, words: list[str], phrase: str) -> bool:
+    """Whole words only. "ok" must not match "book", and "no" must not match "now"."""
+    if " " in phrase:
+        return phrase in text
+    return phrase in words
 
 
 def duplicated(arguments: dict[str, Any]) -> list[str]:

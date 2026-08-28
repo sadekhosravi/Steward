@@ -6,7 +6,17 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
-from core.state import Obligation, StewardState, duplicated, pruned, sources, ungrounded, unmet
+from core.state import (
+    Demand,
+    Obligation,
+    StewardState,
+    answered,
+    duplicated,
+    pruned,
+    sources,
+    ungrounded,
+    unmet,
+)
 from tests.tools import LOOKUP, PLANNER
 
 SEEN = ["My user id is mia_li_3668", '{"reservations": ["HKD3PS", "X4RTG9"]}']
@@ -253,3 +263,64 @@ def test_pruned_keeps_everything_where_the_schema_allows_extras():
     }
     call = {"note": "hello", "extra": 1}
     assert pruned(call, schema) == call
+
+
+# --- the customer answering a condition -------------------------------------
+
+
+def _standing(turn: int = 1) -> list[Demand]:
+    return [Demand(action="cancel_reservation", reason="the customer must confirm", turn=turn)]
+
+
+def test_a_plain_yes_retires_the_demand_into_consent():
+    standing, given = answered(_standing(), "yes, go ahead", turn=2)
+
+    assert standing == []
+    assert [c.action for c in given] == ["cancel_reservation"]
+    assert given[0].words == "yes, go ahead"
+    assert given[0].turn == 2
+
+
+def test_the_customer_s_words_are_kept_verbatim():
+    """A paraphrase of a consent is the one thing nobody should be asked to trust."""
+    _, given = answered(_standing(), "Okay. Please do it.", turn=2)
+
+    assert given[0].words == "Okay. Please do it."
+
+
+def test_a_qualified_yes_is_not_an_answer():
+    """Every one of these carries a yes and none of them is agreement to this."""
+    for reply in [
+        "yes, but not that one",
+        "yes -- actually, wait",
+        "ok, hold on",
+        "sure, though not yet",
+        "yes, cancel the other one instead",
+    ]:
+        standing, given = answered(_standing(), reply, turn=2)
+
+        assert given == [], reply
+        assert standing == _standing(), reply
+
+
+def test_a_refusal_is_not_an_answer():
+    for reply in ["no thanks", "please don't", "no, leave it"]:
+        _, given = answered(_standing(), reply, turn=2)
+
+        assert given == [], reply
+
+
+def test_agreement_is_matched_on_whole_words():
+    """`ok` must not be found inside `book`, and `no` must not be found in `now`."""
+    _, given = answered(_standing(), "book it now", turn=2)
+
+    assert given == []
+
+
+def test_a_demand_made_this_turn_is_not_answered_by_the_message_that_provoked_it():
+    """It has not been put to the customer yet, so a yes in that message agreed to
+    something else."""
+    standing, given = answered(_standing(turn=2), "yes please", turn=2)
+
+    assert given == []
+    assert standing == _standing(turn=2)

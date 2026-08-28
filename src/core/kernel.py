@@ -96,7 +96,17 @@ from agents.gate import Verdict, build_gate, decide, review, transcript
 from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
-from core.state import Change, Demand, Deps, PendingCall, StewardState, Written, pruned
+from core.state import (
+    Change,
+    Consent,
+    Demand,
+    Deps,
+    PendingCall,
+    StewardState,
+    Written,
+    answered,
+    pruned,
+)
 from core.verifiers import Describe, Evidence, Panel, first
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
@@ -337,6 +347,15 @@ def _think(
     not evidence: the call never ran, so it showed us nothing.
     """
     seen = [t for t in [state.prompt, *state.tool_results.values()] if t]
+    # The one node that sees a user message, so the one node that can notice the
+    # customer answering a condition the gate imposed. Done before the actor runs
+    # rather than after, so a proposal made on the strength of this message is
+    # judged already knowing the message agreed to it.
+    standing, given = (
+        answered(state.demanded, state.prompt, state.turns)
+        if state.prompt is not None
+        else (state.demanded, [])
+    )
     run = assistant.run_sync(
         state.prompt,
         message_history=_history(state),
@@ -382,7 +401,21 @@ def _think(
         "correction": "",
         "calls": calls,
         "reply": "" if calls else output,
+        "demanded": standing,
+        "consented": _kept(state.consented, given),
     }
+
+
+def _kept(consented: list[Consent], given: list[Consent]) -> list[Consent]:
+    """The consent ledger with these answers added, latest per action.
+
+    Latest rather than all, for the same reason `_remember` keeps one demand per
+    action: what matters is whether the condition standing over this action has
+    been met, and a list of every time the customer has ever said yes would bury
+    the one that answers the question actually being asked.
+    """
+    replaced = {consent.action for consent in given}
+    return [c for c in consented if c.action not in replaced] + given
 
 
 def _approved(
@@ -460,6 +493,7 @@ def _gate(
                 state.observed,
                 state.demanded,
                 state.turns,
+                state.consented,
                 # The same ledger the speaker counts against. Both exits from a
                 # turn are now judged knowing what the turn owes -- the run had
                 # the plan, the ledger and the speaker all correct and lost the

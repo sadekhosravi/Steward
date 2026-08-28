@@ -637,11 +637,16 @@ def proposes_then_talks(messages: list[ModelMessage], info: AgentInfo) -> ModelR
     return ModelResponse(parts=[call])
 
 
-def test_a_condition_imposed_last_turn_is_put_back_in_front_of_the_gate():
+def test_a_condition_the_customer_answered_comes_back_as_an_answer():
     """The gate is handed a transcript and asked to rule, so a condition it set one
     turn ago has to be re-derived from prose every time -- and 70 of the 166 write
     refusals in the 50-task run were it failing to and demanding the same thing
-    again. Recording the demand turns that into something it is told."""
+    again.
+
+    Recording the demand was half of the fix and left the harder half standing:
+    the gate was reminded what it had asked and still had to work out from prose
+    whether the answer it got was a yes. When the answer is plainly one, the
+    demand is now retired into consent and the gate is shown both sides of it."""
     cases: list[str] = []
     k = kernel(proposes_then_talks, records_then_approves(cases))
 
@@ -650,8 +655,23 @@ def test_a_condition_imposed_last_turn_is_put_back_in_front_of_the_gate():
 
     assert len(cases) == 2
     assert NO_DEMANDS in cases[0]
+    assert "You required, before cancel_reservation" in cases[1]
+    assert "'yes please, go ahead'" in cases[1]
+    assert "You refused cancel_reservation earlier" not in cases[1]
+
+
+def test_a_condition_the_customer_did_not_answer_still_stands():
+    """The one-sided reading that keeps this safe. An unrecognised agreement costs
+    a turn; an invented one would be a write nobody asked for, so anything that
+    has to be interpreted stays a demand and the gate goes on judging it."""
+    cases: list[str] = []
+    k = kernel(proposes_then_talks, records_then_approves(cases))
+
+    k.send("t", f"cancel {SEEN_ID}")
+    k.send("t", "yes, but check the other one first")
+
     assert "You refused cancel_reservation earlier" in cases[1]
-    assert "replied once since" in cases[1]
+    assert "You required, before cancel_reservation" not in cases[1]
 
 
 def test_the_first_review_of_a_conversation_has_nothing_to_report():
