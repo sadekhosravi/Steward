@@ -261,6 +261,61 @@ panel advisory, so what it finds becomes evidence the critic rules on rather tha
 a block that pre-empts it, is a `kernel._gate` change and the obvious next
 experiment.
 
+### Where the missed writes are, and three checks that cannot recover them
+
+Arm C, decomposed by whether the task needs a write at all:
+
+| arm | write tasks completed | zero-write tasks abstained | reward |
+|---|---|---|---|
+| gate off | 19 / 77 (25%) | 48 / 70 (69%) | 0.429 |
+| critic on (arm C) | 23 / 78 (29%) | 59 / 72 (82%) | 0.493 |
+| sieve + critic | 17 / 78 (22%) | 62 / 72 (86%) | 0.500 |
+
+**The reward is carried by abstention.** On tasks that require writing, fewer
+than one in three are finished, and the sieve arm bought its abstention gain by
+doing less work -- the -0.060 interaction, in the units that matter.
+
+Of the 55 simulations that miss a gold write, **39 make none of gold's writes at
+all** and only 16 do part of the job. Of the 39, 23 made a different write
+instead and 13 wrote nothing.
+
+**It is not retrieval.** Every missed gold write whose record carries an
+identifier was on a record the system had already read: 39 never-attempted plus
+21 wrong-argument, and **zero** where the identifier never appeared in a tool
+result. All 55 ended by `user_stop` -- the record sat in the transcript while the
+conversation ran out.
+
+The wrong arguments, field by field, over the 32 near-miss writes: `flights` 17,
+`payment_methods` 10, `payment_id` 9, `reservation_id` 6, then `passengers`,
+`destination`, `total_baggages`.
+
+`flights` is the largest single field and it looked deterministic. It is not.
+Three checks were built as replays over arm C and each is recorded here so it is
+not built again:
+
+| check | gold blocked | surplus caught |
+|---|---|---|
+| itinerary must be a connected chain, and keep the reservation's endpoints | 0 / 27 | **1 / 29** |
+| every `(flight_number, date)` pair must have been returned by a search for that date, or already be on the record | 0 / 32 | **1 / 43** |
+| a looser proximity version of the same grounding | 4 / 32 | 17 / 43 |
+
+Gold itineraries are 20/20 connected and 20/20 endpoint-preserving, so the first
+check is sound and nearly never fires: the wrong itineraries are *valid* ones.
+The second says the same thing from the other side -- the flights the actor chose
+were in the search results, for the right dates. It picked the wrong ones.
+
+And it is not picking the cheapest one wrongly either. Where gold's itinerary
+appears in the pool of options the run was shown, its price rank in the
+reservation's cabin is 1/11, 3/11, 6/11, 9/10, 9/11, 17/18. **Gold is not the
+cheapest**, so "choose the cheapest unless told otherwise" would be wrong more
+often than right.
+
+**Conclusion: `flights` is a choice, not a validity property.** What decides it
+is the customer's stated preference in dialogue, and no rule over the records
+reconstructs it. `ranking.py` -- which computes the comparison and refuses to
+recommend -- is already the correct shape for this field, and the remaining error
+is downstream of it.
+
 ### A note on the Pass^k columns
 
 The table above reports `scripts/score.py`'s estimator, "the first k trials all
