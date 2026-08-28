@@ -573,3 +573,28 @@ def test_a_commitment_the_customer_never_withdrew_cannot_wedge_the_turn():
     # budget and leaves without asking. So an unretired commitment costs one model
     # call a turn, for as long as it stands, and can never stop the conversation.
     assert len(consulted) == 3 * DEFERRAL_LIMIT
+
+
+# --- the third ledger --------------------------------------------------------
+#
+# A change the policy forbids used to stay owed for the rest of the conversation,
+# which cost a model call and nothing else. It stopped being free when
+# `adapters.tau2.handoff` started refusing a transfer while work is owed: an
+# obligation nobody can discharge would then wedge the exit shut.
+
+
+def test_a_change_a_verifier_settled_stops_being_owed():
+    ruled_out = [Written(tool="cancel_reservation", records=[SEEN_ID])]
+    assert outstanding([CHANGE], [], ruled_out) == []
+
+
+def test_a_ruling_on_one_record_leaves_the_others_owed():
+    """The multi-record defect is not reintroduced by the second exit from the
+    ledger. Refusing one reservation settles that one and nothing beside it."""
+    other = Change(tool="cancel_reservation", record="OTHER1", what="the return leg")
+    ruled_out = [Written(tool="cancel_reservation", records=[SEEN_ID])]
+    assert outstanding([CHANGE, other], [], ruled_out) == [other]
+
+
+def test_nothing_ruled_out_is_the_same_answer_as_before():
+    assert outstanding([CHANGE], []) == outstanding([CHANGE], [], []) == [CHANGE]

@@ -346,6 +346,33 @@ class StewardState(BaseModel):
     of what is owed is worth nothing beside a ledger of what is done that resets
     underneath it."""
 
+    ruled_out: list[Written] = Field(default_factory=list)
+    """Changes a verifier has settled as not permitted, in the same shape as the
+    ones that happened.
+
+    The second way a commitment may leave `changes`, and it was added the moment
+    the first way stopped being enough. "A commitment leaves only by being carried
+    out" is exactly right while `outstanding` merely *advises* -- the speaker asks
+    a model, the critic reads it as context, and an obligation nobody can discharge
+    costs a question. It stops being right the moment something blocks on it:
+    `adapters.tau2.handoff` refuses a transfer while work is owed, so a change the
+    policy forbids would wedge the exit shut for the rest of the conversation. The
+    customer asks for two things, one of them is not allowed, and the assistant
+    can then neither do it nor stop talking about it.
+
+    Only a *deterministic* refusal writes here, and only one that is not
+    recoverable. Both halves are load-bearing. Arithmetic over the record is the
+    only ruling in this system that can be replayed and checked, and the whole
+    reason `core.verifiers` exists is that the critic's opinion at 20B is close to
+    a coin -- a model that could retire an obligation by calling it impossible
+    would be able to talk itself out of the work, which is the failure this ledger
+    was built to stop. `recoverable` refusals are excluded because they are not
+    rulings at all: they say "send this differently", and the change stands.
+
+    Matched against `changes` by tool *and* record, so refusing one reservation
+    leaves the other five owed -- the multi-record defect that `changes` records
+    is not reintroduced here."""
+
     correction: str = ""
     """A held reply, as the instruction the actor gets for its next attempt."""
 

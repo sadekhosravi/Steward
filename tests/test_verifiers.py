@@ -27,7 +27,7 @@ from adapters.tau2.payment import payment_composition, payment_for_change
 from adapters.tau2.verifiers import PANEL
 from agents.gate import Verdict as _Verdict
 from core.state import PendingCall
-from core.verifiers import Evidence, Panel, first
+from core.verifiers import Evidence, Finding, Panel, first
 
 
 def call(name, **arguments):
@@ -691,3 +691,96 @@ def test_the_panel_asks_this_of_a_handoff_and_of_nothing_else():
     # is fail this one.
     finding = first(call("cancel_reservation", reservation_id="H9ZU1C"), owing, PANEL)
     assert finding is None or finding.check != "work_still_owed"
+
+
+# --- what may retire an obligation -------------------------------------------
+
+CANCEL = {"id": "1", "name": "cancel_reservation", "arguments": {"reservation_id": "XEHM4B"}}
+
+
+def test_a_verifier_that_settles_a_change_takes_it_off_the_books():
+    from core import kernel
+    from core.state import Change, StewardState
+    from core.verifiers import Panel
+
+    def forbidden(*_):
+        return Finding(
+            check="forbidden",
+            reason="A passenger cannot be removed from a reservation.",
+            remediation="Tell the customer this is not permitted.",
+        )
+
+    state = StewardState(
+        calls=[CANCEL],
+        changes=[Change(tool="cancel_reservation", record="XEHM4B", what="cancel it")],
+        observed=[reservation()],
+    )
+    out = kernel._gate(
+        state,
+        None,
+        frozenset({"cancel_reservation"}),
+        Panel(verifiers={"cancel_reservation": [forbidden]}),
+    )
+
+    assert out["approved"] == []
+    assert [w.tool for w in out["ruled_out"]] == ["cancel_reservation"]
+    assert "XEHM4B" in out["ruled_out"][0].records
+
+
+def test_a_refusal_the_assistant_can_rewrite_its_way_past_settles_nothing():
+    """`recoverable` means "send this differently", not "this will never happen"."""
+    from core import kernel
+    from core.state import StewardState
+    from core.verifiers import Panel
+
+    def fixable(*_):
+        return Finding(
+            check="fixable",
+            reason="Too many gift cards.",
+            remediation="Use at most three.",
+            recoverable=True,
+        )
+
+    state = StewardState(
+        calls=[CANCEL],
+        observed=[reservation()],
+    )
+    out = kernel._gate(
+        state,
+        None,
+        frozenset({"cancel_reservation"}),
+        Panel(verifiers={"cancel_reservation": [fixable]}),
+    )
+
+    assert out["ruled_out"] == []
+
+
+def test_the_critic_may_not_retire_an_obligation_by_calling_it_impossible(monkeypatch):
+    """The guard on the whole mechanism.
+
+    A 20B critic that could take work off the books by declaring it forbidden
+    would be able to talk itself out of the task -- which is the failure this
+    ledger exists to stop, arriving through the ledger itself. Only arithmetic
+    over the record may settle anything.
+    """
+    from core import kernel
+    from core.state import StewardState
+    from core.verifiers import Panel
+
+    monkeypatch.setattr(kernel, "REVIEWING", True)
+    monkeypatch.setattr(
+        kernel,
+        "decide",
+        lambda *_: _Verdict(
+            allowed=False, reason="not allowed", remediation="say no", recoverable=False
+        ),
+    )
+
+    state = StewardState(
+        calls=[CANCEL],
+        observed=[reservation()],
+    )
+    out = kernel._gate(state, None, frozenset({"cancel_reservation"}), Panel())
+
+    assert out["approved"] == []
+    assert out["ruled_out"] == []

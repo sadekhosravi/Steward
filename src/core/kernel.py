@@ -276,7 +276,7 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # the case most likely to be asked again on the very next round trip, and a
     # budget only charged for successes would not bound it at all.
     spent = state.replans if opening else state.replans + 1
-    owed = outstanding(state.changes, state.written)
+    owed = outstanding(state.changes, state.written, state.ruled_out)
     try:
         plan = planner.run_sync(
             brief(
@@ -499,7 +499,7 @@ def _gate(
                 # the plan, the ledger and the speaker all correct and lost the
                 # task anyway, because the handoff leaves through this node and
                 # this node could not see any of it.
-                outstanding(state.changes, state.written),
+                outstanding(state.changes, state.written, state.ruled_out),
             ),
         )
         if not verdict.allowed:
@@ -605,7 +605,10 @@ def _evidence(state: StewardState) -> Evidence:
         # rather than the world. Computed the same way the speaker computes it,
         # from the same two ledgers, so the two guards on the two exits from a
         # turn cannot come to different answers about what is left to do.
-        owed=[(change.tool, change.record) for change in outstanding(state.changes, state.written)],
+        owed=[
+            (change.tool, change.record)
+            for change in outstanding(state.changes, state.written, state.ruled_out)
+        ],
     )
 
 
@@ -636,12 +639,23 @@ def _refused(
     counted = (
         {"blocked": state.blocked + 1} if deterministic else {"revisions": state.revisions + 1}
     )
+    # A deterministic refusal the assistant cannot rewrite its way past is a
+    # ruling, not a correction: this call is never going to be allowed. The
+    # matching commitment stops being owed, so the turn can end by telling the
+    # customer instead of being held to work the policy forbids. Only arithmetic
+    # gets this -- see `StewardState.ruled_out`.
+    settled = (
+        [Written.of(call.name, call.arguments) for call in proposal if call.name in set(writes)]
+        if deterministic and not recoverable
+        else []
+    )
     return {
         **counted,
         "approved": [],
         "calls": [],
         "denied": {call.id: message for call in proposal},
         "demanded": _remember(state.demanded, writes, reason, state.turns),
+        "ruled_out": state.ruled_out + settled,
         # Only a fix the assistant can carry out alone. A refusal waiting on the
         # customer is not something to send it back over -- that is the turn
         # ending correctly, and holding the reply would loop it against a
@@ -692,7 +706,7 @@ def _speak(state: StewardState, speaker: Agent[None, Verdict]) -> dict[str, Any]
             "fixable": "",
         }
 
-    owed = outstanding(state.changes, state.written)
+    owed = outstanding(state.changes, state.written, state.ruled_out)
     if not owed:
         return {}
 

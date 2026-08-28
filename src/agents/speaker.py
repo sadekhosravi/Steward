@@ -222,8 +222,10 @@ UNCHECKED = Verdict(
 )
 
 
-def outstanding(changes: list[Change], written: list[Written]) -> list[Change]:
-    """Planned changes that no approved call has covered yet.
+def outstanding(
+    changes: list[Change], written: list[Written], ruled_out: list[Written] | None = None
+) -> list[Change]:
+    """Planned changes that neither an approved call nor a ruling has covered yet.
 
     The deterministic half, and the part that decides whether the model is asked
     at all. A change is done when the gate has approved a call to its tool that
@@ -241,8 +243,16 @@ def outstanding(changes: list[Change], written: list[Written]) -> list[Change]:
     on. The bias stays where it was -- a change that cannot be shown to have
     happened stays outstanding, because the cost of asking about a turn that was
     actually finished is one model call, and the cost of missing one is the task.
+
+    `ruled_out` discharges a change the same way an approved call does, and by the
+    same comparison, because the question here is only whether the change is still
+    open. A verifier has settled that it will never happen; leaving it owed would
+    make the assistant liable for work the policy forbids. See
+    `StewardState.ruled_out` for why only arithmetic is allowed to put anything
+    there.
     """
-    return [change for change in changes if not any(_covers(done, change) for done in written)]
+    settled = list(written) + list(ruled_out or [])
+    return [change for change in changes if not any(_covers(done, change) for done in settled)]
 
 
 def _covers(done: Written, change: Change) -> bool:
