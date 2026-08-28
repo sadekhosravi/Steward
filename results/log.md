@@ -316,6 +316,32 @@ reconstructs it. `ranking.py` -- which computes the comparison and refuses to
 recommend -- is already the correct shape for this field, and the remaining error
 is downstream of it.
 
+### The payment family is already as covered as it gets
+
+The other large near-miss field, and the same answer. Replaying the merged panel
+over arm C's 135 executed writes: **0 of 62 gold blocked, 5 of 73 surplus caught**
+-- `cancellable` 2, `compensation` 1, `not_yet_flown` 1, `payment_composition` 1.
+That last is task 14, which pays a booking with two credit cards where the policy
+allows one, and it is caught only because the sieve is now on the same branch as
+the critic.
+
+Two further payment checks were built and measured, and neither survives:
+
+- **Amounts must not exceed the card's balance.** Fires on nothing: 0 of 19
+  payment-bearing calls in the run overspends a gift card or certificate.
+- **Amounts must sum to the reservation's total.** Already measured dead and
+  documented in `adapters/tau2/payment.py` -- the fare lives in a search result
+  the proposal does not carry, so any reconstruction is sometimes guessing.
+
+What is left in `payment_id` and `payment_methods` is which of several *valid*
+cards the customer wanted, and how the total was split across them. Like
+`flights`, that is a dialogue fact, not a record fact.
+
+**So both argument-side levers are closed.** The remaining reward is not in
+making the writes more correct; it is in making them happen at all -- 39 of the
+55 simulations that miss a gold write make none of gold's writes, and 13 of those
+attempt no write whatsoever.
+
 ### A note on the Pass^k columns
 
 The table above reports `scripts/score.py`'s estimator, "the first k trials all
