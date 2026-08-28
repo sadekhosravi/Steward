@@ -23,6 +23,7 @@ from adapters.tau2.modifications import (
     passenger_count_fixed,
 )
 from adapters.tau2.payment import payment_composition, payment_for_change
+from agents.gate import Verdict as _Verdict
 from core.state import PendingCall
 from core.verifiers import Evidence, Panel, first
 
@@ -561,3 +562,69 @@ def test_a_flown_leg_does_not_tell_the_actor_to_abandon_the_other_reservations()
     assert finding is not None
     assert "finish everything else" in finding.remediation
     assert "Only once nothing else is left" in finding.remediation
+
+
+# ------------------------------------------------- the critic rules first
+
+
+def test_a_proposal_the_critic_refuses_never_reaches_the_verifiers(monkeypatch):
+    """The ordering that the 2x2 bought.
+
+    Verifiers-first and critic-first block the same proposals; what differs is
+    which component is denied the chance to see one. Running the free checks
+    first means every proposal they answer is a proposal the critic never rules
+    on, and the arms measured 0.487 alone, 0.493 alone and only 0.500 together --
+    an interaction of -0.060. The critic now goes first, and these run over what
+    it allowed.
+    """
+    from core import kernel
+    from core.state import StewardState
+    from core.verifiers import Panel
+
+    monkeypatch.setattr(kernel, "REVIEWING", True)
+    monkeypatch.setattr(
+        kernel, "decide", lambda *_: _Verdict(allowed=False, reason="no", remediation="ask")
+    )
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("the verifiers ran on a proposal the critic had already refused")
+
+    proposed = {"id": "1", "name": "cancel_reservation", "arguments": {"reservation_id": "XEHM4B"}}
+    state = StewardState(calls=[proposed], observed=[reservation()])
+
+    out = kernel._gate(
+        state,
+        None,
+        frozenset({"cancel_reservation"}),
+        Panel(verifiers={"cancel_reservation": [never]}),
+    )
+
+    assert out["approved"] == []
+    assert out["revisions"] == 1
+
+
+def test_a_verifier_still_vetoes_what_the_critic_allowed(monkeypatch):
+    """The half of the reversal that has to keep working: the critic's word is not
+    final, it is only first."""
+    from core import kernel
+    from core.state import StewardState
+    from core.verifiers import Panel
+
+    monkeypatch.setattr(kernel, "REVIEWING", True)
+    monkeypatch.setattr(
+        kernel, "decide", lambda *_: _Verdict(allowed=True, reason="fine", remediation="")
+    )
+
+    proposed = {"id": "1", "name": "cancel_reservation", "arguments": {"reservation_id": "XEHM4B"}}
+    state = StewardState(calls=[proposed], observed=[reservation()])
+
+    out = kernel._gate(
+        state,
+        None,
+        frozenset({"cancel_reservation"}),
+        Panel(verifiers={"cancel_reservation": [cancellable]}),
+    )
+
+    assert out["approved"] == []
+    assert out["blocked"] == 1
+    assert "revisions" not in out  # the deterministic budget, not the critic's

@@ -430,18 +430,74 @@ def _gate(
     with one forbidden move in it is not half-executable -- letting the harmless
     calls through would leave the actor re-planning from a position it never
     chose.
+
+    The critic rules first and the deterministic checks veto what it allowed.
+    That ordering was the other way round until the 2x2 was filled in, and the
+    reversal is the whole finding: a verifier that answers first is a verifier
+    that stops the critic from ever seeing the proposal, and the two arms
+    measured 0.487 (verifiers alone) and 0.493 (critic alone) but only 0.500
+    together -- an interaction of -0.060 against what independence predicts.
+    Pre-emption was buying the cheaper answer at the price of the better one.
+    Nothing here is a new check; the same findings block the same proposals, and
+    the only proposals that change hands are the ones the critic would have
+    refused anyway.
     """
     proposal = [PendingCall(**call) for call in state.calls]
     writes = [call.name for call in proposal if call.name in gated]
     if not writes:
         return {"approved": state.calls, "calls": []}
 
-    # The deterministic checks run first and run always, whether or not the critic
-    # is switched on. They cost nothing, they cannot be argued out of an answer,
-    # and measured over 247 real proposals they refuse none of the 49 writes the
-    # benchmark's answer key makes while stopping 21% of the ones it does not.
-    # There is no configuration in which paying a model to reach a worse version
-    # of the same answer is the better trade.
+    if REVIEWING:
+        # `decide` retries and never raises: letting a failure propagate ends the
+        # simulation and scores 0, where refusing costs one action and is
+        # recoverable. An unanswered check still fails closed, but only after the
+        # call has been given more than one chance to come back.
+        verdict = decide(
+            gate,
+            review(
+                _history(state),
+                proposal,
+                state.observed,
+                state.demanded,
+                state.turns,
+                # The same ledger the speaker counts against. Both exits from a
+                # turn are now judged knowing what the turn owes -- the run had
+                # the plan, the ledger and the speaker all correct and lost the
+                # task anyway, because the handoff leaves through this node and
+                # this node could not see any of it.
+                outstanding(state.changes, state.written),
+            ),
+        )
+        if not verdict.allowed:
+            return _refused(
+                state, proposal, writes, verdict.reason, verdict.remediation, verdict.recoverable
+            )
+
+    # Run always, whether or not the critic is switched on -- otherwise turning
+    # the critic off would remove two components rather than one, and the arm
+    # would measure something nobody asked about.
+    refusal = _sieved(state, proposal, writes, gated, panel, selection, describe)
+    if refusal is not None:
+        return refusal
+    return _approved(state, proposal, gated)
+
+
+def _sieved(
+    state: StewardState,
+    proposal: list[PendingCall],
+    writes: list[str],
+    gated: frozenset[str],
+    panel: Panel | None,
+    selection: Panel | None,
+    describe: Describe | None,
+) -> dict[str, Any] | None:
+    """The deterministic veto over an approved proposal, or `None` to let it go.
+
+    Measured over 247 real proposals these refuse none of the 49 writes the
+    benchmark's answer key makes while stopping 21% of the ones it does not, and
+    they cost no model call -- so there is no configuration in which the critic's
+    word should stand over theirs.
+    """
     evidence = _evidence(state)
     for call in proposal:
         if call.name not in gated:
@@ -486,35 +542,7 @@ def _gate(
                 finding.recoverable,
                 deterministic=True,
             )
-
-    if not REVIEWING:
-        return _approved(state, proposal, gated)
-
-    # `decide` retries and never raises: letting a failure propagate ends the
-    # simulation and scores 0, where refusing costs one action and is
-    # recoverable. An unanswered check still fails closed, but only after the
-    # call has been given more than one chance to come back.
-    verdict = decide(
-        gate,
-        review(
-            _history(state),
-            proposal,
-            state.observed,
-            state.demanded,
-            state.turns,
-            # The same ledger the speaker counts against. Both exits from a turn
-            # are now judged knowing what the turn owes -- the run had the plan,
-            # the ledger and the speaker all correct and lost the task anyway,
-            # because the handoff leaves through this node and this node could
-            # not see any of it.
-            outstanding(state.changes, state.written),
-        ),
-    )
-    if verdict.allowed:
-        return _approved(state, proposal, gated)
-    return _refused(
-        state, proposal, writes, verdict.reason, verdict.remediation, verdict.recoverable
-    )
+    return None
 
 
 def _evidence(state: StewardState) -> Evidence:
