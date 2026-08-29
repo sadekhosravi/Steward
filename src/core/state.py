@@ -28,6 +28,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "ANY",
     "Change",
     "Consent",
     "Demand",
@@ -41,6 +42,7 @@ __all__ = [
     "invented",
     "mispriced",
     "pruned",
+    "quoted",
     "sources",
     "ungrounded",
     "unmet",
@@ -401,6 +403,23 @@ class StewardState(BaseModel):
     than merely discouraged -- the lookup that caused it is exactly the thing that
     can no longer rewrite it. See `_plan`."""
 
+    opened: str = ""
+    """The first request of the conversation, never rewritten.
+
+    The rule above stops a *lookup* narrowing the scope. It cannot stop the next
+    customer turn doing it, because the planner re-derives the request from a
+    conversation the assistant's own framing now dominates, and by then the
+    framing may be wrong. Task 41 asked to cancel "all of my upcoming flights that
+    only have me on the reservation"; the assistant proposed four reservations
+    with two and three passengers on them, the customer agreed to what it offered,
+    and the next request read "cancel all four reservations and process the $90
+    refund" -- the criterion that made three of those four wrong, gone.
+
+    Kept beside `request` rather than instead of it. A customer really may change
+    their mind, and task 7 is a task about exactly that, so neither one is the
+    truth on its own. Both are shown to the gate and the difference between them
+    is the thing worth seeing."""
+
     changes: list[Change] = Field(default_factory=list)
     """The writes the request needs, as the planner has described them so far.
 
@@ -578,6 +597,13 @@ AGREED = (
     "correct",
 )
 
+# The action a consent covers when the customer was answering the assistant's own
+# question rather than a condition this gate imposed. A tool name would be a
+# guess -- the assistant asked in prose and the answer is to the prose -- so the
+# consent is filed against every action and the gate reads the question to decide
+# what it actually covers.
+ANY = "*"
+
 # Any of these and the message is not treated as agreement, whatever else is in
 # it. "Yes, but not that one" and "yes -- wait" are the sentences this exists for.
 REFUSED = (
@@ -600,7 +626,9 @@ REFUSED = (
 )
 
 
-def answered(demanded: list[Demand], reply: str, turn: int) -> tuple[list[Demand], list[Consent]]:
+def answered(
+    demanded: list[Demand], reply: str, turn: int, asked: str = ""
+) -> tuple[list[Demand], list[Consent]]:
     """Move every demand this message answers out of `demanded` and into consent.
 
     Returns both lists so the caller writes them together: a demand that has been
@@ -610,6 +638,21 @@ def answered(demanded: list[Demand], reply: str, turn: int) -> tuple[list[Demand
     Only demands from an *earlier* turn are eligible. One made during the turn in
     progress has not been put to the customer yet, so a "yes" in the message that
     provoked it is agreement to something else.
+
+    `asked` is the assistant's own last message, and it is the half this was
+    missing. Consent only ever entered the ledger through a demand *this gate*
+    had made, so the first confirmation in a conversation was always invisible:
+    the assistant says "the difference is $340, shall I go ahead?", the customer
+    says yes, no demand exists, nothing is recorded, and the gate refuses for
+    want of an agreement it had already been given. Measured on the 381 gate
+    decisions of the 50x3, 17 of the 23 gold writes it refused were exactly that.
+    The ledger was one refusal late.
+
+    What is recorded is evidence, not permission -- the question and the answer,
+    both verbatim, under `ANY` because the assistant's question is not about a
+    tool. Whether a yes to "shall I look that up?" covers a booking is a
+    judgement, and it stays with the gate, which is shown both halves and can see
+    the difference.
 
     The test is a word match, not a judgement. It is one-sided on purpose: an
     unrecognised agreement leaves the demand standing and costs a turn, while a
@@ -625,6 +668,8 @@ def answered(demanded: list[Demand], reply: str, turn: int) -> tuple[list[Demand
         for demand in demanded
         if demand.turn < turn
     ]
+    if asked.strip():
+        given.append(Consent(action=ANY, reason=asked.strip(), words=reply.strip(), turn=turn))
     return standing, given
 
 
@@ -694,6 +739,20 @@ def sources(arguments: dict[str, Any], observed: list[str]) -> list[tuple[str, s
         line = next((text for text in reversed(observed) if value in text), "")
         found.append((path, value, _around(line, value)))
     return found
+
+
+def quoted(value: str, texts: list[str]) -> str:
+    """The most recent of `texts` holding `value`, clipped around it. "" if none.
+
+    `sources` searches everything the system has been shown, which answers "was
+    this value established" and cannot answer "is this the record the customer
+    meant" -- a reservation the customer owns but never mentioned is quoted from
+    the lookup that returned it and looks exactly as grounded as one they named.
+    Given only the customer's own turns this answers the second question, and the
+    two together are what the gate needs: task 41 lost on three cancellations and
+    task 1 on one, every one of them an identifier the customer never typed.
+    """
+    return _around(next((text for text in reversed(texts) if value in text), ""), value)
 
 
 def _around(text: str, value: str, width: int = 70) -> str:

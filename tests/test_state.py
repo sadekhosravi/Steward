@@ -7,6 +7,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
 from core.state import (
+    ANY,
     Change,
     Demand,
     Obligation,
@@ -326,6 +327,55 @@ def test_a_demand_made_this_turn_is_not_answered_by_the_message_that_provoked_it
 
     assert given == []
     assert standing == _standing(turn=2)
+
+
+# --- the customer answering the assistant, which no demand ever covered ------
+
+
+ASKED = "The fare difference is $340. Shall I go ahead and change the flights?"
+
+
+def test_a_yes_to_the_assistant_s_own_question_is_recorded():
+    """The defect this fixes: consent only ever entered through a demand the gate
+    had made, so the first confirmation of a conversation was always invisible and
+    the gate refused for want of an agreement it had been given."""
+    _, given = answered([], "yes, go ahead", turn=2, asked=ASKED)
+
+    assert [c.action for c in given] == [ANY]
+    assert given[0].reason == ASKED
+    assert given[0].words == "yes, go ahead"
+    assert given[0].turn == 2
+
+
+def test_the_assistant_s_question_is_kept_verbatim_beside_the_answer():
+    """Both halves, or the gate cannot tell what the yes covered."""
+    _, given = answered([], "sure", turn=2, asked=ASKED)
+
+    assert given[0].reason == ASKED
+    assert given[0].words == "sure"
+
+
+def test_a_hesitant_reply_records_nothing_however_it_was_asked():
+    for reply in ["yes, but not the return leg", "ok, hold on", "no thanks"]:
+        _, given = answered([], reply, turn=2, asked=ASKED)
+
+        assert given == [], reply
+
+
+def test_nothing_is_recorded_when_the_assistant_asked_nothing():
+    """An opening message the customer volunteers a yes into agreed to nothing."""
+    for asked in ["", "   "]:
+        _, given = answered([], "yes please", turn=2, asked=asked)
+
+        assert given == []
+
+
+def test_an_answered_demand_and_an_answered_question_are_both_kept():
+    """They are different evidence: one closes a condition this gate set, the
+    other is the customer's own words about a question nobody here framed."""
+    _, given = answered(_standing(), "yes, go ahead", turn=2, asked=ASKED)
+
+    assert [c.action for c in given] == ["cancel_reservation", ANY]
 
 
 # ---------------------------------------------------------------- anchored

@@ -332,6 +332,9 @@ def _plan(
     carried = _widen(state.changes, changes)
     return {
         "request": request,
+        # Written once and then never again, so a later turn cannot quietly drop
+        # the condition the customer opened with.
+        "opened": state.opened or request,
         "plan": render(plan.model_copy(update={"request": request})),
         "policy": excerpt(policy, sections),
         "sections": sections,
@@ -379,8 +382,11 @@ def _think(
     # customer answering a condition the gate imposed. Done before the actor runs
     # rather than after, so a proposal made on the strength of this message is
     # judged already knowing the message agreed to it.
+    # `state.reply` is the assistant's last message to the customer, and so the
+    # question this one is answering: `_speak` returns only `consulted` when it
+    # lets a reply go, so the reply survives the turn it was sent on.
     standing, given = (
-        answered(state.demanded, state.prompt, state.turns)
+        answered(state.demanded, state.prompt, state.turns, state.reply)
         if state.prompt is not None
         else (state.demanded, [])
     )
@@ -526,6 +532,11 @@ def _gate(
                 # task anyway, because the handoff leaves through this node and
                 # this node could not see any of it.
                 outstanding(state.changes, state.written, state.ruled_out),
+                # What the customer wants, which this node has been ruling
+                # without -- and what they wanted before the assistant's own
+                # framing had a turn to replace it.
+                state.request,
+                state.opened,
             ),
         )
         if not verdict.allowed:

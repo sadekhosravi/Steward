@@ -61,12 +61,14 @@ from pydantic_ai.models import Model
 
 import llm
 from core.state import (
+    ANY,
     Change,
     Consent,
     Demand,
     PendingCall,
     duplicated,
     mispriced,
+    quoted,
     sources,
     ungrounded,
 )
@@ -139,6 +141,13 @@ whether it happens at all, and you are the only check there is.
 
 WHAT YOU ARE GIVEN
 
+WHAT THE CUSTOMER ASKED FOR is the whole of their request, at the scope they
+asked for it, and it is the second thing you rule against. Read it before the
+proposal. Where a second line says what they first asked for, the request has
+moved since: either the customer changed their mind, which is theirs to do, or
+the assistant's own suggestion has quietly replaced what they wanted. The
+transcript tells you which, and only one of them is a reason to go on.
+
 CONVERSATION SO FAR is everything that has happened, including the assistant's
 own lookups and what they returned. This is your evidence -- if the assistant
 checked something, the check and its result are in there.
@@ -151,11 +160,25 @@ conversation, and entries the proposal repeats. They are leads to follow, not
 verdicts.
 
 WHERE EACH IDENTIFIER CAME FROM quotes, for every identifier in the proposal, the
-line of the conversation it was taken from. Read it. A value being *somewhere* in
-the conversation is not the same as it being the right one: a reservation the
+line of the conversation it was taken from, and then says whether the customer
+ever said that value themselves. Read both. A value being *somewhere* in the
+conversation is not the same as it being the right one: a reservation the
 customer owns but never mentioned, or a second gift card on the same profile,
 will both appear here attached to text that shows they are not what was asked
 for. This is the one check that catches an action aimed at the wrong record.
+
+"The customer has never mentioned this value" does not settle anything on its
+own -- they routinely ask for something without naming the record it lands on,
+and the assistant is supposed to look it up. It settles it when the request also
+names a *test* the record has to pass. Then the record came from a lookup, the
+customer's test decides which lookups qualify, and you can check it against what
+was returned.
+
+WHAT THE CUSTOMER HAS AGREED TO is what they have already said yes to, quoted
+with the question it answered -- sometimes a condition you imposed, sometimes one
+the assistant put to them itself. An agreement to the change being proposed is a
+confirmation, whoever asked for it, and asking for it again is the commonest way
+this gate loses a task.
 
 WHAT YOU ALREADY REQUIRED is the conditions you yourself imposed on earlier
 attempts at these same actions, and how many times the customer has replied
@@ -166,11 +189,21 @@ what happened on 70 of the 166 refusals in the last full run.
 The proposal is a single step and you judge it as one: if any part of it is not
 allowed, the whole step is refused, so account for all of it.
 
-APPROVE UNLESS THE POLICY FORBIDS IT
+APPROVE UNLESS THE POLICY FORBIDS IT OR THE CUSTOMER DID NOT ASK FOR IT
 
-The policy below is your only authority. If it does not prohibit this action,
-approve it. Do not invent requirements, do not apply general caution, and do not
-block because you would have gone about it differently or in a different order.
+You have two authorities and no others: the policy below, and what the customer
+asked for. If the policy does not prohibit this action and the customer did ask
+for it, approve it. Do not invent requirements, do not apply general caution, and
+do not block because you would have gone about it differently or in a different
+order.
+
+The second authority is not a softer version of the first. The policy says what
+may be done to a record; it says nothing at all about *which* record, and an
+action can be perfectly permitted and still be one nobody asked for. A customer
+who asks you to cancel the bookings that only have them travelling has not asked
+you to cancel a booking with three people on it, however cancellable that one
+happens to be. Doing it anyway is not caution and it is not service -- it is an
+irreversible change to a record that was never in question.
 
 Understand what a block costs. The assistant gets two corrections and is then
 stopped and made to talk to the customer. Every block you issue spends one of
@@ -187,7 +220,15 @@ WHAT TO BLOCK
 - An argument's value was never established: not returned by any tool, not given
   by the customer, not derived from either.
 - A figure was worked out in the assistant's head and it is wrong.
-- The action does not do what the customer actually asked for.
+- The action does not do what the customer actually asked for. Two shapes, and
+  both are irreversible changes to something that was never in question:
+  * It lands on a record the request does not cover -- the customer set a test
+    the record has to pass ("the ones with only me on them", "the trip to
+    Chicago") and this record fails it on what a lookup already returned.
+  * It breaks a condition they attached -- a budget, a deadline, all-or-nothing
+    ("not if it comes to more than $200", "only if you can do the whole thing").
+    A condition the customer set is theirs, not the policy's, and it holds even
+    where the policy would permit the action.
 
 WHAT IS NOT A REASON TO BLOCK
 
@@ -211,6 +252,12 @@ mistake -- far more common than letting something through.
 - The request is unusual, awkward, or expensive. None of those are policy.
 - You are not certain. Absence of a prohibition is permission. If you cannot name
   the rule and the fact that breaks it, you do not have grounds.
+- The customer did not name this record. They ask for things without knowing the
+  identifier and the assistant looks it up; that is the normal way this works.
+  Block only when the request states a test and what a lookup returned shows this
+  record fails it. Never block merely because the value came from a lookup.
+- The action is one step of what they asked for. A request covering four records
+  is carried out one record at a time, and each of those calls is asked for.
 - A rule from a different request. Reservations are shared between procedures and
   the rules are not: what forbids changing the flights on a booking says nothing
   about changing its cabin, adding a bag to it, or cancelling it. Find the entry
@@ -269,6 +316,28 @@ Example 6 -- BLOCK. A handoff standing in for a refusal.
   within the assistant's own actions, and refusing a request is one of them.
   remediation: Tell the customer that this refund is not something the policy
   allows and explain why, then ask what else you can do for them.
+
+Example 7 -- BLOCK. Permitted by the policy, and not what was asked for.
+  Proposed: cancel_reservation with reservation_id 8C8K4E
+  The request reads: cancel all of my upcoming flights that only have me on the
+  reservation. get_reservation returned 8C8K4E with two passengers on it, and the
+  customer has never mentioned that identifier.
+  The policy permits this cancellation -- it is a business cabin booking, which is
+  a ground on its own -- so there is no rule to cite and it is still wrong. The
+  customer set a test, the record fails it on what the lookup returned, and this
+  is an irreversible change to a booking that was never in question.
+  reason: the customer asked only for reservations with themselves as the sole
+  passenger, and get_reservation shows 8C8K4E carries two.
+  remediation: Leave 8C8K4E alone. Cancel only the reservations whose passenger
+  list has the customer and nobody else, and tell them which ones those are.
+
+Example 8 -- APPROVE. From a lookup, and asked for all the same.
+  Proposed: update_reservation_baggages with reservation_id 4WQ150
+  The customer said "add a bag to my Chicago trip" and never gave an identifier.
+  get_user returned their reservations and 4WQ150 is the one flying to ORD.
+  They named a test, not an id, and this record passes it. Refusing because the
+  value came from a lookup would refuse the normal way every request is carried
+  out.
 
 HOW TO ANSWER
 
@@ -349,6 +418,9 @@ condition it depends on was satisfied.
 
 
 REVIEW = """
+WHAT THE CUSTOMER ASKED FOR
+{request}
+
 CONVERSATION SO FAR
 {transcript}
 
@@ -385,6 +457,8 @@ NO_FINDINGS = "None. Every value in the proposed action appeared earlier in the 
 
 NO_PROVENANCE = "The proposed action carries no identifiers."
 
+NO_REQUEST = "Not recorded. Read the conversation above for what the customer wants."
+
 NO_DEMANDS = "Nothing. You have not refused any of these actions before."
 
 NO_CONSENTS = "Nothing recorded. Read the conversation above to see what was agreed."
@@ -397,6 +471,20 @@ CONSENT = (
     "You required, before {action}: {reason}\n"
     "  The customer answered on turn {turn}, saying: {words!r}\n"
     "  That condition is met. Do not require it again."
+)
+
+# The customer answering the assistant rather than answering this gate. Worded
+# apart from `CONSENT` on purpose, and deliberately weaker: that one closes a
+# condition the gate itself set and can say so, while this one is the customer's
+# own words about a question nobody here framed. Telling the gate a condition is
+# met when it never set one is how a yes to "shall I look that up?" would come to
+# license a booking. So it is put as evidence and the reading is left open.
+ANSWERED = (
+    "The assistant asked the customer this, and they replied.\n"
+    "  Asked: {reason}\n"
+    "  Answered on turn {turn}: {words!r}\n"
+    "  Both quoted verbatim. What that answer covers is yours to decide: compare "
+    "what was described against what is now proposed."
 )
 
 NOTHING_OWED = "Nothing. Every change this turn was planned to make has been approved."
@@ -421,6 +509,19 @@ MISPRICED = (
 FROM = "- {path} = {value!r}\n    taken from: {snippet}"
 
 NOWHERE = "- {path} = {value!r}\n    taken from: nothing in the conversation."
+
+# The half the snippet cannot show. `sources` quotes the most recent text holding
+# the value, which for a reservation id is a slice of the record a lookup
+# returned -- true, and silent on the only question that matters, which is
+# whether this is the record the customer meant. Both surplus cancellations that
+# lost task 41 and the one that lost task 1 are on identifiers the customer never
+# typed; every one of them was quoted from a lookup and approved.
+NAMED = "\n    the customer named this themselves: {snippet}"
+
+UNNAMED = (
+    "\n    the customer has never mentioned this value. It comes only from a "
+    "lookup, so nothing here says it is the record they asked about."
+)
 
 
 # Malformed answers from the model, inside one `run_sync`. A 20B model sometimes
@@ -541,6 +642,8 @@ def review(
     turn: int = 0,
     consented: list[Consent] | None = None,
     owed: list[Change] | None = None,
+    request: str = "",
+    opened: str = "",
 ) -> str:
     """The case put to the gate: what happened, what is proposed, what looks off,
     where each identifier came from, what this gate has already required, and what
@@ -552,16 +655,44 @@ def review(
     reply and named the call to make, the actor proposed a handoff instead, and
     this node approved it with no idea a confirmed cancellation was outstanding. A
     ledger only one guard can see does not cover the exit the other one guards.
+
+    `request` is the planner's own statement of what the customer wants, at the
+    scope they asked for it, and this node was ruling without it. Task 41's said
+    "cancel all of my upcoming flights that only have me on the reservation" while
+    this gate approved three cancellations on reservations carrying two and three
+    passengers -- correctly, on the only authority it had, because the policy
+    permits cancelling a business-cabin booking and nothing here was asking the
+    other question.
     """
     return REVIEW.format(
+        request=asked_for(request, opened),
         transcript=transcript(messages) or "(nothing yet)",
         proposal="\n".join(f"{c.name}({_arguments(c.arguments)})" for c in proposal),
         findings=findings(proposal, observed),
-        provenance=provenance(proposal, observed),
+        provenance=provenance(proposal, observed, messages),
         demands=demands(proposal, demanded or [], turn),
         consents=consents(proposal, consented or []),
         owed="\n".join(f"- {c.key}: {c.what}".rstrip(": ") for c in owed) if owed else NOTHING_OWED,
     )
+
+
+def asked_for(request: str, opened: str) -> str:
+    """What the customer wants, and what they wanted to begin with.
+
+    Both, when they have come apart, and without saying which is right. The
+    planner may only rewrite this when the customer has spoken, so a difference
+    here is a real turn of the conversation -- and it is either the customer
+    changing their mind or the assistant's own framing having replaced theirs.
+    Task 7 is the first and task 41 is the second, they are indistinguishable
+    from the strings alone, and the gate has the transcript to tell them apart.
+    """
+    now = " ".join(request.split())
+    first = " ".join(opened.split())
+    if not now and not first:
+        return NO_REQUEST
+    if not first or first == now:
+        return now or first
+    return f"{now}\n  When they first asked, it was: {first}"
 
 
 def findings(proposal: list[PendingCall], observed: list[str]) -> str:
@@ -598,7 +729,11 @@ def findings(proposal: list[PendingCall], observed: list[str]) -> str:
     return "\n".join([*lines, "", CAVEAT]) if lines else NO_FINDINGS
 
 
-def provenance(proposal: list[PendingCall], observed: list[str]) -> str:
+def provenance(
+    proposal: list[PendingCall],
+    observed: list[str],
+    messages: list[ModelMessage] | None = None,
+) -> str:
     """Every identifier in the proposal, quoted with the text it was taken from.
 
     Evidence, in the same spirit as `findings`, for a failure that one cannot see:
@@ -609,14 +744,37 @@ def provenance(proposal: list[PendingCall], observed: list[str]) -> str:
     surrounding text puts the question in front of something that can answer it,
     and costs no model call and no knowledge of the domain.
     """
+    spoken = _spoken(messages or [])
     lines = [
         (FROM if snippet else NOWHERE).format(
             path=f"{call.name}.{path}", value=value, snippet=snippet
         )
+        + _by_the_customer(value, spoken)
         for call in proposal
         for path, value, snippet in sources(call.arguments, observed)
     ]
     return "\n".join(lines) if lines else NO_PROVENANCE
+
+
+def _spoken(messages: list[ModelMessage]) -> list[str]:
+    """Only what the customer typed. Not the lookups, not the assistant."""
+    return [
+        part.content
+        for message in messages
+        for part in message.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    ]
+
+
+def _by_the_customer(value: str, spoken: list[str]) -> str:
+    """Whether the customer ever said this value, and where.
+
+    The non-drifting half of the pair. `request` is the planner's restatement and
+    can be re-derived wrongly; this is what the customer actually typed, and no
+    later turn can rewrite it.
+    """
+    snippet = quoted(value, spoken)
+    return NAMED.format(snippet=snippet) if snippet else UNNAMED
 
 
 def demands(proposal: list[PendingCall], demanded: list[Demand], turn: int) -> str:
@@ -653,14 +811,14 @@ def consents(proposal: list[PendingCall], consented: list[Consent]) -> str:
     """
     proposed = {call.name for call in proposal}
     lines = [
-        CONSENT.format(
+        (ANSWERED if consent.action == ANY else CONSENT).format(
             action=consent.action,
             reason=" ".join(consent.reason.split()),
             turn=consent.turn,
             words=" ".join(consent.words.split()),
         )
         for consent in consented
-        if consent.action in proposed
+        if consent.action in proposed or consent.action == ANY
     ]
     return "\n".join(f"- {line}" for line in lines) if lines else NO_CONSENTS
 

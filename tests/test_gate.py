@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelRequest,
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -29,9 +30,11 @@ from agents.gate import (
     NO_DEMANDS,
     NO_FINDINGS,
     NO_PROVENANCE,
+    NO_REQUEST,
     NOTHING_OWED,
     OUTPUT_RETRIES,
     UNAVAILABLE,
+    asked_for,
     build_gate,
     decide,
     demands,
@@ -916,3 +919,70 @@ def test_the_switch_is_off_only_when_asked(monkeypatch):
         assert kernel._reviewing() is expected
     monkeypatch.delenv("STEWARD_GATE")
     assert kernel._reviewing() is False
+
+
+# --- what the customer asked for --------------------------------------------
+
+
+def test_the_request_is_put_to_the_gate():
+    """The defect: task 41's request said "only the ones with just me on the
+    reservation" and this node ruled without ever being shown it."""
+    case = review(
+        [],
+        [PendingCall(id="c1", name="cancel_reservation", arguments={})],
+        [],
+        request="cancel the flights that only have me on them",
+    )
+
+    assert "WHAT THE CUSTOMER ASKED FOR" in case
+    assert "only have me on them" in case
+
+
+def test_a_request_that_has_moved_is_shown_beside_the_one_it_started_as():
+    """Neither is the truth on its own -- a customer may really change their mind
+    -- so the gate is shown both and the transcript decides which happened."""
+    both = asked_for("cancel all four reservations", "cancel the ones with just me on them")
+
+    assert "cancel all four reservations" in both
+    assert "When they first asked, it was: cancel the ones with just me on them" in both
+
+
+def test_a_request_that_has_not_moved_is_shown_once():
+    assert asked_for("cancel HKD3PS", "cancel HKD3PS") == "cancel HKD3PS"
+    assert asked_for("cancel HKD3PS", "") == "cancel HKD3PS"
+
+
+def test_no_request_recorded_says_so_rather_than_going_blank():
+    assert asked_for("", "") == NO_REQUEST
+
+
+# --- whether the customer ever named the record -----------------------------
+
+
+def test_an_identifier_the_customer_never_typed_is_called_out():
+    """Both of task 41's surplus cancellations were on reservations the customer
+    owned, never mentioned, and the gate approved because a lookup had shown them."""
+    call = PendingCall(id="c1", name="cancel_reservation", arguments={"reservation_id": "LU15PA"})
+    said = ModelRequest(parts=[UserPromptPart(content="cancel the ones with just me on them")])
+    report = provenance([call], ['{"reservation_id": "LU15PA", "cabin": "business"}'], [said])
+
+    assert "the customer has never mentioned this value" in report
+
+
+def test_an_identifier_the_customer_named_is_quoted_from_their_own_words():
+    call = PendingCall(id="c1", name="cancel_reservation", arguments={"reservation_id": "HKD3PS"})
+    said = ModelRequest(parts=[UserPromptPart(content="please cancel HKD3PS for me")])
+    report = provenance([call], ['{"reservation_id": "HKD3PS"}'], [said])
+
+    assert "the customer named this themselves" in report
+    assert "please cancel HKD3PS for me" in report
+
+
+def test_only_the_customer_s_own_turns_count_as_naming():
+    """A lookup returning the id, or the assistant repeating it, is not the
+    customer asking about it -- that is the whole distinction being drawn."""
+    call = PendingCall(id="c1", name="cancel_reservation", arguments={"reservation_id": "LU15PA"})
+    assistant = ModelResponse(parts=[TextPart("I can cancel LU15PA for you.")])
+    report = provenance([call], ["LU15PA is business cabin"], [assistant])
+
+    assert "the customer has never mentioned this value" in report
