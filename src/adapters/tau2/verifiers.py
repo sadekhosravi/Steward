@@ -19,7 +19,6 @@ from core.verifiers import Panel
 from .cancellable import cancellable
 from .compensation import compensation
 from .flown import not_yet_flown
-from .handoff import work_still_owed
 from .intended import intended, read_first
 from .modifications import (
     baggage_only_grows,
@@ -32,11 +31,6 @@ __all__ = ["PANEL", "SELECTION"]
 
 PANEL = Panel(
     verifiers={
-        # Not a write, and gated all the same -- `agent.HANDOFF` folds it in
-        # because the question the gate asks is whether an action can be taken
-        # back, and a transfer ends the conversation. It is the only entry here
-        # whose rule is about the turn rather than about the record.
-        "transfer_to_human_agents": [work_still_owed],
         "book_reservation": [payment_composition],
         "send_certificate": [compensation],
         "cancel_reservation": [read_first, not_yet_flown, cancellable],

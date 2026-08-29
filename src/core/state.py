@@ -350,15 +350,26 @@ class StewardState(BaseModel):
     """Changes a verifier has settled as not permitted, in the same shape as the
     ones that happened.
 
-    The second way a commitment may leave `changes`, and it was added the moment
-    the first way stopped being enough. "A commitment leaves only by being carried
-    out" is exactly right while `outstanding` merely *advises* -- the speaker asks
-    a model, the critic reads it as context, and an obligation nobody can discharge
-    costs a question. It stops being right the moment something blocks on it:
-    `adapters.tau2.handoff` refuses a transfer while work is owed, so a change the
-    policy forbids would wedge the exit shut for the rest of the conversation. The
-    customer asks for two things, one of them is not allowed, and the assistant
-    can then neither do it nor stop talking about it.
+    The second way a commitment may leave `changes`. "A commitment leaves only by
+    being carried out" is right about the writes it was written about, and wrong
+    about the ones the policy forbids: the customer asks for two things, one of
+    them is not allowed, and without this the refused one is owed for the rest of
+    the conversation. Everything reading `outstanding` is then reasoning from a
+    debt that can never be paid -- the planner is told the turn is unfinished, the
+    critic is handed it as context for every later proposal, and the speaker is
+    asked about it on every exit.
+
+    It was built for a stronger reason than that, and the stronger reason did not
+    survive. A verifier that refused a handoff while work was owed would have made
+    an unpayable debt wedge the exit shut, which made this a correctness
+    requirement rather than a tidiness one. That verifier is gone -- measured over
+    a 15-task run it fired nine times where transferring was correct and nine
+    times where it was not, which is no signal at all, and it fired on the one
+    task whose gold action *is* a transfer. What that run also showed is that
+    nothing ever reached this ledger: 0 writes in 242 gate decisions, because the
+    refusals in question came from the critic in prose and the rule below bars the
+    critic from settling anything. So this is kept for what it does to the three
+    readers above, and it is honest to say it has not yet been observed to fire.
 
     Only a *deterministic* refusal writes here, and only one that is not
     recoverable. Both halves are load-bearing. Arithmetic over the record is the

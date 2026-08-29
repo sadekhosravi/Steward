@@ -17,14 +17,12 @@ import json
 
 from adapters.tau2.cancellable import cancellable
 from adapters.tau2.compensation import compensation
-from adapters.tau2.handoff import work_still_owed
 from adapters.tau2.modifications import (
     baggage_only_grows,
     flights_changeable,
     passenger_count_fixed,
 )
 from adapters.tau2.payment import payment_composition, payment_for_change
-from adapters.tau2.verifiers import PANEL
 from agents.gate import Verdict as _Verdict
 from core.state import PendingCall
 from core.verifiers import Evidence, Finding, Panel, first
@@ -630,67 +628,6 @@ def test_a_verifier_still_vetoes_what_the_critic_allowed(monkeypatch):
     assert out["approved"] == []
     assert out["blocked"] == 1
     assert "revisions" not in out  # the deterministic budget, not the critic's
-
-
-# --- the handoff ---------------------------------------------------------
-#
-# The one check here whose subject is the turn rather than the record, and the
-# one with the most to lose by firing wrongly: 42 of the 51 transfers in the arm
-# C run scored 1.00, because most of this task set is requests the policy refuses
-# and handing over is the right ending. So the tests below spend most of their
-# room on silence.
-
-
-def test_a_handoff_is_refused_while_the_plan_still_owes_a_change():
-    finding = work_still_owed(
-        call("transfer_to_human_agents", summary="cannot remove the passenger"),
-        Evidence.of([], owed=[("book_reservation", None)]),
-    )
-    assert finding is not None
-    assert finding.check == "work_still_owed"
-    # The remediation is the actor's entire retry prompt, so it has to name the call.
-    assert "book_reservation" in finding.remediation
-    assert finding.recoverable is True
-
-
-def test_the_refusal_names_the_record_the_change_was_going_to_land_on():
-    finding = work_still_owed(
-        call("transfer_to_human_agents"),
-        Evidence.of([], owed=[("cancel_reservation", "H9ZU1C")]),
-    )
-    assert "cancel_reservation on H9ZU1C" in finding.remediation
-
-
-def test_a_handoff_with_nothing_outstanding_is_left_alone():
-    """The common case, and the one that carries the reward: refusing a request
-    the policy does not permit and handing over is a task passed, not a failure."""
-    assert work_still_owed(call("transfer_to_human_agents"), Evidence.of([])) is None
-
-
-def test_a_handoff_is_not_judged_by_whether_the_customer_asked_for_a_person():
-    """Measured over the 51 transfers, that was true in 12 and separates nothing.
-
-    A verifier that read it would block correct handoffs and miss the abandonment
-    it exists for, so the dialogue is deliberately not consulted.
-    """
-    asked = Evidence.of([], dialogue="Customer: just put me through to a real person")
-    unasked = Evidence.of([], dialogue="Customer: fine, whatever")
-    assert work_still_owed(call("transfer_to_human_agents"), asked) is None
-    assert work_still_owed(call("transfer_to_human_agents"), unasked) is None
-    begged = Evidence.of(
-        [], dialogue="Customer: put me through to a person", owed=[("book_reservation", None)]
-    )
-    assert work_still_owed(call("transfer_to_human_agents"), begged) is not None
-
-
-def test_the_panel_asks_this_of_a_handoff_and_of_nothing_else():
-    owing = Evidence.of([], owed=[("book_reservation", None)])
-    assert first(call("transfer_to_human_agents"), owing, PANEL) is not None
-    # A write proposed while another change is outstanding is ordinary work. It
-    # has its own checks and may well fail one of them -- what it must never do
-    # is fail this one.
-    finding = first(call("cancel_reservation", reservation_id="H9ZU1C"), owing, PANEL)
-    assert finding is None or finding.check != "work_still_owed"
 
 
 # --- what may retire an obligation -------------------------------------------
