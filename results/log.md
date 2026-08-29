@@ -157,6 +157,17 @@ the reward column reaches it and nothing here claims otherwise.
 
 ### Part 4 is a measured regression
 
+> **VOID (2026-08-29).** Every "sieve on" cell below was measured while
+> `records._loaded` could not parse a decorated tool result, so the deterministic
+> tier was one check firing falsely on 100% of proposals and five checks that
+> never executed once. Of 151 write proposals in a later journalled run, 11 were
+> approved. The sieve scored positively here because refusing writes buys
+> abstention and abstention carries reward on this benchmark -- that is a defect
+> being rewarded, not a mechanism working. The numbers are kept as the record;
+> none of them describes the system. See "The verifier tier had never once read a
+> record". Not yet re-measured.
+
+
 Arm A abstains more than arm C on every cut, and more than the *unscaffolded
 control* — which arm C was comfortably below. Six pre-sieve runs transfer at
 42–48%; arm A transfers at 60.7%. The Part 4 sieve bought write precision
@@ -210,6 +221,17 @@ Instrumenting this — a sidecar record of every proposal, verdict and reason �
 is the prerequisite for the next round of gate work.
 
 ### Filling the 2x2: the sieve and the critic are not additive
+
+> **VOID (2026-08-29).** Every "sieve on" cell below was measured while
+> `records._loaded` could not parse a decorated tool result, so the deterministic
+> tier was one check firing falsely on 100% of proposals and five checks that
+> never executed once. Of 151 write proposals in a later journalled run, 11 were
+> approved. The sieve scored positively here because refusing writes buys
+> abstention and abstention carries reward on this benchmark -- that is a defect
+> being rewarded, not a mechanism working. The numbers are kept as the record;
+> none of them describes the system. See "The verifier tier had never once read a
+> record". Not yet re-measured.
+
 
 The three-arm experiment left one cell empty and could not attribute the Part 4
 regression. Two more runs, same conditions, close it.
@@ -382,6 +404,14 @@ often. It is that the assistant does not try.
 
 ### The handoff verifier: built, measured live, reverted
 
+> **SUPERSEDED (2026-08-29).** The nine-each-way result below was produced by a
+> predicate reading an inflated ledger -- 38% of `Change.record` entries were
+> prose placeholders that could never be discharged. With the ledger anchored
+> (`49414eb`) the same check fires 27 times where gold does not transfer and 2
+> where it does, and both of the 2 are task 13, which a record-level bar now
+> excludes. Restored in `3738b25` at 27 and 0.
+
+
 The one lever the abstention finding seemed to leave open. Splitting arm C's 51
 transfers by whether the task needed a write at all is as clean a separation as
 this corpus offers:
@@ -522,6 +552,57 @@ Fixed in `49414eb`. A bare identifier is kept whether or not anyone has read it,
 because two bookings named in one breath have been read by nobody and dropping
 both would merge two commitments into one -- `test_speaker` caught exactly that
 when the first version of the rule was too eager.
+
+### The fixed run, and what the write half fails at now
+
+15x2, same 15 tasks, `STEWARD_GATE=on`, journalled both times. Both columns are
+28 scored simulations counted by the same script.
+
+| metric | before (`7b7d0d7`) | after (`49414eb`) |
+|---|---|---|
+| write proposals | 151 | 74 |
+| writes approved | 11 | 43 |
+| **approval rate** | **7.3%** | **58.1%** |
+| gate refusals | 140 | 31 |
+| -- `read_first`, all false | 56 | **0** |
+| -- other deterministic | 21 | 3 |
+| -- critic | 63 | 28 |
+| speaker holds | 122 | 59 |
+| act / talk turns | 336 / 367 | 232 / 218 |
+| write-task reward | 0.143 | 0.231 |
+| zero-write reward | 0.929 | 1.000 |
+| overall | 0.536 | 0.643 |
+
+Proposals per simulation 5.4 -> 2.6: the actor stopped re-proposing a write after
+being falsely refused. **26 paired simulations, 1 gained, 0 lost.** One
+discordant pair is p = 0.5; the reward column is not a result and is not claimed
+as one. What is a result is that the risk did not materialise -- unblocking the
+writes did not let surplus writes through, and zero-write went 13/14 to 15/15.
+
+Both runs stopped short of 30 simulations: the first killed by hand, the second
+stalled on tau2's user simulator, which goes through LiteLLM uninstrumented at a
+300s timeout and 3 retries. The two missing simulations scored 0.0 in the
+baseline.
+
+**Where the write half fails now**, 13 simulations, 3 passing:
+
+| bucket | sims | example |
+|---|---|---|
+| full gold recall, lost to **one surplus write** | 2 | task 44 |
+| right tool, right record, **one wrong argument** | 2 | task 21 |
+| wrong route or record entirely | 2 | task 24 |
+| under-write: a gold write never made | 4 | 35, 39x2, 19/0 |
+
+Task 44 makes all three gold `update_reservation_flights` calls with every field
+exact -- reservation, cabin, flights, payment -- and loses to one extra write on
+`S61CZX`. Task 21 gets reservation, cabin, payment and three of four segments
+right and misses on one flight number.
+
+That last one is a duration question, and it is arithmetic. Five one-stop options
+were on the page; the run took the slowest, which was printed first; gold took the
+quickest that had seats in the cabin. `ranking.py` computed cheapest-per-cabin
+and earliest-departure and nothing else, and nothing else in the package computed
+duration either. Closed in `64850c9`.
 
 ### A note on the Pass^k columns
 
