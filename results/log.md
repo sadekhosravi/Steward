@@ -33,6 +33,7 @@ not comparable to one that lost none.
 | all_parts_50 | + Parts 1–6, harmony repair | 1 | **0.460** | 0.460 | — | — | — | **50/50** |
 | arm C `stable_ef6cffd_50x3` | **stable `ef6cffd`: monolithic critic on, no sieve** | 3 | **0.493 ±0.030** | 0.500 | 0.360 | 0.300 | — | 150/150 |
 | arm B `ab_control_50x3` | **control: tau2's own `llm_agent`, no scaffold** | 3 | 0.433 ±0.026 | 0.460 | 0.320 | 0.300 | — | 149/150 |
+| `veto_consent_50x3` | + verifiers as veto over the critic, consent ledger | 3 | 0.507 ±0.021 | 0.480 | 0.460 | 0.400 | — | 150/150 |
 | arm A `ab_steward_50x3` | Part 4 sieve `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
 | cell 1 `gateoff_ef6cffd_50x3` | `ef6cffd` + `STEWARD_GATE=off`: nothing gating | 3 | 0.420 ±0.031 | 0.420 | 0.273 | 0.220 | — | 147/150 |
 | cell 2 `sievegate_73ad27f_50x3` | `73ad27f` + `STEWARD_GATE=on`: **sieve and critic together** | 3 | **0.500 ±0.027** | 0.500 | 0.393 | 0.340 | — | 150/150 |
@@ -341,6 +342,43 @@ cards the customer wanted, and how the total was split across them. Like
 making the writes more correct; it is in making them happen at all -- 39 of the
 55 simulations that miss a gold write make none of gold's writes, and 13 of those
 attempt no write whatsoever.
+
+### The verifier reordering and the consent ledger: no movement, and a sharper trade
+
+`veto_consent_50x3` is `d1384f6` -- the sieve on `dev`, the deterministic checks
+moved to *after* the critic so they veto what it allowed rather than pre-empting
+it, and consent recorded as a typed ledger entry instead of re-derived from the
+transcript on every turn. Measured against arm C over the same 150 simulations:
+
+    arm C     0.493
+    this run  0.507      delta +0.013
+
+There is no effect here. Seventeen simulations gained and fifteen lost, so a
+paired sign test over the 32 discordant pairs gives **p = 0.86** -- a coin. Four
+tasks (3, 10, 30, 34) flip in *both* directions across their own three trials at
+temperature 0.0, and the per-trial means inside each arm span 0.44 to 0.54, which
+is four times the difference being claimed. The +0.020 that replaying the
+reordering over arm C's saved trajectories predicted is not visible at n=150.
+
+What did move is the composition, and it moved the wrong way:
+
+| | write tasks (n=78) | zero-write tasks (n=72) | mean |
+|---|---|---|---|
+| arm C | 0.218 | 0.792 | 0.493 |
+| this run | **0.141** | **0.903** | 0.507 |
+
+Six fewer tasks that need a write got one; eight more tasks that need no write
+were correctly declined. The two cancel. This is the third consecutive arm to
+show that trade, and the clearest: **every component added so far buys abstention
+and pays for it in work.** The reward is flat because the two halves are close to
+the same size, not because nothing happened.
+
+It is worth being exact about what this does and does not condemn. The
+reordering and the consent ledger were shipped for reasons that are still sound
+-- the -0.060 interaction is real, and 70 of 166 refusals really were conditions
+the customer had already answered. What the run says is that neither reaches
+reward, because the binding constraint is not that the assistant is refused too
+often. It is that the assistant does not try.
 
 ### A note on the Pass^k columns
 
