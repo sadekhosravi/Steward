@@ -36,7 +36,7 @@ from core.verifiers import Evidence, Finding
 
 from .records import reservations
 
-__all__ = ["BASIC", "baggage_only_grows", "flights_changeable", "passenger_count_fixed"]
+__all__ = ["baggage_only_grows", "flights_changeable", "passenger_count_fixed"]
 
 BASIC = "basic_economy"
 

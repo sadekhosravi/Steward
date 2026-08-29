@@ -114,29 +114,13 @@ class Evidence:
     committed: tuple[str, ...] = ()
     looked_up: tuple[tuple[str, dict, str], ...] = ()
 
-    owed: tuple[tuple[str, str | None], ...] = ()
-    """The changes the plan still wants and no approved call has covered, as
-    (tool, record) pairs.
-
-    The only entry here that describes the turn rather than the world, and it is
-    carried because one rule needs it and cannot be written without it: a handoff
-    is judged by what it abandons. It is `speaker.outstanding` computed once in
-    the Kernel and handed over, rather than recomputed, so the gate and the
-    speaker cannot disagree about what is owed.
-
-    Empty means nothing is outstanding *as far as the plan knows* -- which is not
-    the same as nothing being outstanding. A verifier reading this may block on
-    what it contains and must never conclude anything from what it does not.
-    """
-
     stated: Mapping[str, Any] = field(default_factory=dict)
     """How the customer described the record, extracted from their own words.
 
     The one entry here that a model produced, and it is deliberately shaped as
     facts rather than a verdict: "one passenger", not "wrong reservation". The
     comparison against the record is still arithmetic, still in code, and still
-    the only thing allowed to block -- see `agents.selector` for why the split
-    falls there and `adapters.tau2.intended` for what the keys mean.
+    the only thing allowed to block.
 
     Empty is the common case and means the customer described nothing, never that
     nothing matches. A verifier reading this must treat a missing key exactly as
@@ -151,14 +135,12 @@ class Evidence:
         committed: list[str] | None = None,
         looked_up: list[tuple[str, dict, str]] | None = None,
         stated: Mapping[str, Any] | None = None,
-        owed: list[tuple[str, str | None]] | None = None,
     ) -> Evidence:
         return cls(
             tuple(observed),
             dialogue,
             tuple(committed or ()),
             tuple(looked_up or ()),
-            tuple(owed or ()),
             dict(stated or {}),
         )
 

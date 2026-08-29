@@ -8,7 +8,6 @@ module is only translation -- no decisions are taken here.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 from pydantic_ai.models import Model
@@ -25,7 +24,6 @@ from tau2.environment.tool import Tool
 from tau2.environment.toolkit import MUTATES_STATE_ATTR
 
 from adapters.tau2.baggage import bags
-from adapters.tau2.describing import describing
 from adapters.tau2.descriptions import describe
 from adapters.tau2.eligibility import eligibility
 from adapters.tau2.money import money
@@ -33,7 +31,7 @@ from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
 from adapters.tau2.totals import totals
-from adapters.tau2.verifiers import PANEL, SELECTION
+from adapters.tau2.verifiers import PANEL
 from core.kernel import Act, Kernel, Step
 
 
@@ -53,17 +51,6 @@ class AgentState:
 # does not import tau2. tau2 spells it the same way in every domain
 # (`LLMSoloAgent.TRANSFER_TOOL_NAME`).
 HANDOFF = frozenset({"transfer_to_human_agents"})
-
-
-# Off until it has been measured on the answer key, which is the same bar every
-# other verifier had to clear: zero false blocks against the 49 writes gold makes,
-# not a good rate. `STEWARD_SELECT=on` turns it on. Read once at import, like
-# `STEWARD_GATE` -- a run does not change its mind half way through.
-#
-# Unlike the free checks, this one costs a model call on every write proposal that
-# reaches it, so leaving it on by default would also charge every domain user for
-# a stage nobody has scored yet.
-SELECTING = os.environ.get("STEWARD_SELECT", "off").strip().lower() == "on"
 
 
 def _tool_def(tool: Tool) -> ToolDefinition:
@@ -178,10 +165,6 @@ class StewardAgent(HalfDuplexAgent[AgentState]):
             gate_model,
             reference=reference(declared),
             panel=PANEL,
-            selection=SELECTION if SELECTING else None,
-            describe=describing(gate_model if gate_model is not None else model)
-            if SELECTING
-            else None,
         )
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:

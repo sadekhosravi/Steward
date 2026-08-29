@@ -19,8 +19,7 @@ from core.verifiers import Panel
 from .cancellable import cancellable
 from .compensation import compensation
 from .flown import not_yet_flown
-from .handoff import work_still_owed
-from .intended import intended, read_first
+from .intended import read_first
 from .modifications import (
     baggage_only_grows,
     flights_changeable,
@@ -28,15 +27,10 @@ from .modifications import (
 )
 from .payment import payment_composition, payment_for_change
 
-__all__ = ["PANEL", "SELECTION"]
+__all__ = ["PANEL"]
 
 PANEL = Panel(
     verifiers={
-        # Not a write, and gated all the same -- `agent.HANDOFF` folds it in
-        # because the question the gate asks is whether an action can be taken
-        # back, and a transfer ends the conversation. It is the only entry here
-        # whose rule is about the turn rather than about the record.
-        "transfer_to_human_agents": [work_still_owed],
         "book_reservation": [payment_composition],
         "send_certificate": [compensation],
         "cancel_reservation": [read_first, not_yet_flown, cancellable],
@@ -53,26 +47,5 @@ PANEL = Panel(
             baggage_only_grows,
             payment_for_change,
         ],
-    }
-)
-
-# Kept apart from `PANEL` because of what it costs, not what it decides. Every
-# verifier above is a pure function of things already on disk; `intended` needs
-# `Evidence.stated`, which one model call has to produce first. Running it in the
-# same table would pay for that extraction on proposals a free check was about to
-# refuse anyway -- 62 of the 198 in the labelled corpus never reach a model at all.
-#
-# It is also the only stage here that is off by default. Measured, it blocks no
-# gold write in either source and catches 2 surplus ones for 136 model calls;
-# `agents.selector` records why that is kept rather than deleted.
-#
-# `book_reservation` is absent and always will be: it creates the record it is
-# about, so there is no existing reservation to have described.
-SELECTION = Panel(
-    verifiers={
-        "cancel_reservation": [intended],
-        "update_reservation_flights": [intended],
-        "update_reservation_passengers": [intended],
-        "update_reservation_baggages": [intended],
     }
 )

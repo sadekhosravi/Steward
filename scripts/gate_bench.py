@@ -58,7 +58,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
@@ -449,62 +449,11 @@ def sieve(proposal: Proposal) -> Decision:
     return Decision(blocked=blocked, check="requested" if blocked else "", calls=2)
 
 
-_SELECTOR: list[Any] = []
-
-
-def selection(proposal: Proposal) -> Decision:
-    """Tier 1, then the extractor and the comparison it feeds.
-
-    One model call per proposal that survives Tier 1, and the model is asked for a
-    description rather than a verdict -- see `agents.selector`. Whatever it
-    returns, the thing that blocks is `adapters.tau2.intended`, comparing a stated
-    number against a field.
-
-    The question is built by `adapters.tau2.describing.asking`, the same function
-    the Kernel uses, rather than assembled here. That matters more than the tidiness
-    of it: the shipped version deliberately withholds the record from the extractor,
-    and a harness that assembled its own question would quietly measure a different
-    gate from the one that runs.
-
-    Reported per criterion (`intended:passengers`, `intended:cabin`, ...) so each
-    dimension carries its own precision and the ones that do not earn their place
-    can be removed rather than averaged into the ones that do.
-    """
-    from adapters.tau2.describing import asking
-    from adapters.tau2.verifiers import SELECTION
-    from agents.selector import build_selector, described
-    from core.state import PendingCall
-    from core.verifiers import Evidence, first
-
-    settled = tier1(proposal)
-    if settled.blocked:
-        return settled
-    if not SELECTION.for_tool(proposal.name):
-        return settled
-
-    if not _SELECTOR:
-        _SELECTOR.append(build_selector(os.environ.get("STEWARD_LLM_MODEL")))
-
-    call = PendingCall(id="p", name=proposal.name, arguments=proposal.arguments)
-    evidence = Evidence.of(
-        proposal.observed, proposal.dialogue, proposal.committed, proposal.looked_up
-    )
-    stated = described(_SELECTOR[0], *asking(call, evidence))
-    # Kept on the proposal so `--out` can carry it. What the extractor returned is
-    # the only thing that separates "the model read nothing" from "it read
-    # something the comparison had no rule for", and those two want opposite fixes.
-    proposal.stated = dict(stated)
-
-    finding = first(call, replace(evidence, stated=dict(stated)), SELECTION)
-    return Decision(blocked=finding is not None, check=finding.check if finding else "", calls=1)
-
-
 GATES: dict[str, Gate] = {
     "none": open_gate,
     "monolith": monolith,
     "tier1": tier1,
     "sieve": sieve,
-    "selection": selection,
 }
 
 

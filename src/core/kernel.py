@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal
 from uuid import uuid4
@@ -108,7 +108,7 @@ from core.state import (
     answered,
     pruned,
 )
-from core.verifiers import Describe, Evidence, Panel, first
+from core.verifiers import Evidence, Panel, first
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -459,8 +459,6 @@ def _gate(
     gate: Agent[None, Verdict],
     gated: frozenset[str],
     panel: Panel | None = None,
-    selection: Panel | None = None,
-    describe: Describe | None = None,
 ) -> dict[str, Any]:
     """Approve or refuse the proposed step, as a whole.
 
@@ -520,7 +518,7 @@ def _gate(
     # Run always, whether or not the critic is switched on -- otherwise turning
     # the critic off would remove two components rather than one, and the arm
     # would measure something nobody asked about.
-    refusal = _sieved(state, proposal, writes, gated, panel, selection, describe)
+    refusal = _sieved(state, proposal, writes, gated, panel)
     if refusal is not None:
         return refusal
     return _approved(state, proposal, gated)
@@ -532,8 +530,6 @@ def _sieved(
     writes: list[str],
     gated: frozenset[str],
     panel: Panel | None,
-    selection: Panel | None,
-    describe: Describe | None,
 ) -> dict[str, Any] | None:
     """The deterministic veto over an approved proposal, or `None` to let it go.
 
@@ -558,34 +554,6 @@ def _sieved(
                 deterministic=True,
             )
 
-    # The checks that need a fact only the conversation holds. They are separated
-    # from the ones above by cost and nothing else: `describe` is a model call, so
-    # it is paid for only by proposals the free checks have already cleared, and
-    # only for tools that point at a record somebody could have described.
-    #
-    # The model produces the description; the comparison stays arithmetic and
-    # stays here. That split is why these count as deterministic refusals -- what
-    # blocks is still a verifier reading a record, and an extraction that fails
-    # comes back empty, which is silence rather than a refusal.
-    for call in proposal:
-        if call.name not in gated or not selection or not describe:
-            continue
-        if not selection.for_tool(call.name):
-            continue
-        stated = describe(call, evidence)
-        if not stated:
-            continue
-        finding = first(call, replace(evidence, stated=dict(stated)), selection)
-        if finding is not None:
-            return _refused(
-                state,
-                proposal,
-                writes,
-                finding.reason,
-                finding.remediation,
-                finding.recoverable,
-                deterministic=True,
-            )
     return None
 
 
@@ -611,14 +579,6 @@ def _evidence(state: StewardState) -> Evidence:
         transcript(_history(state)),
         [written.tool for written in state.written],
         looked_up,
-        # `owed` last because it is the one thing here that is about the turn
-        # rather than the world. Computed the same way the speaker computes it,
-        # from the same two ledgers, so the two guards on the two exits from a
-        # turn cannot come to different answers about what is left to do.
-        owed=[
-            (change.tool, change.record)
-            for change in outstanding(state.changes, state.written, state.ruled_out)
-        ],
     )
 
 
@@ -832,8 +792,6 @@ def build_graph(
     schemas: dict[str, dict[str, Any]],
     policy: str,
     panel: Panel,
-    selection: Panel | None = None,
-    describe: Describe | None = None,
 ) -> Any:
     graph = StateGraph(StewardState)
     graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
@@ -847,8 +805,6 @@ def build_graph(
                 gate=gate,
                 gated=gated,
                 panel=panel,
-                selection=selection,
-                describe=describe,
             ),
         ),
     )
@@ -910,8 +866,6 @@ class Kernel:
         speaker_model: str | Model | None = None,
         reference: str = "",
         panel: Panel | None = None,
-        selection: Panel | None = None,
-        describe: Describe | None = None,
     ):
         """`gate_model`, `planner_model` and `speaker_model` let the two critics and
         the planner run on a different model from the actor. All default to the
@@ -936,8 +890,6 @@ class Kernel:
             _schemas(tools),
             policy,
             panel or Panel(),
-            selection,
-            describe,
         )
 
     def new_thread(self) -> str:
