@@ -108,7 +108,7 @@ from core.state import (
     answered,
     pruned,
 )
-from core.verifiers import Evidence, Panel, first
+from core.verifiers import Evidence, Panel, Planned, first
 
 __all__ = ["Act", "Kernel", "PendingCall", "Say", "Step", "build_graph"]
 
@@ -243,7 +243,13 @@ def _history(state: StewardState) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(state.messages)
 
 
-def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[str, Any]:
+def _plan(
+    state: StewardState,
+    planner: Agent[None, Plan],
+    policy: str,
+    panel: Panel | None = None,
+    planned: Planned | None = None,
+) -> dict[str, Any]:
     """Write down the route, and rewrite it every time a lookup answers something.
 
     Runs at the top of a user turn and again after each `act`, which is the only
@@ -277,7 +283,15 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # the case most likely to be asked again on the very next round trip, and a
     # budget only charged for successes would not bound it at all.
     spent = state.replans if opening else state.replans + 1
-    owed = outstanding(state.changes, state.written, state.ruled_out)
+    # Settled before `owed` is computed, because this node's whole output depends
+    # on it: the planner is told to carry every outstanding change forward, and a
+    # change nothing can ever discharge would be re-listed for the rest of the
+    # conversation. This is also the only node that runs when new records arrive,
+    # which is the only moment the answer can change.
+    seen = [t for t in [state.prompt, *state.tool_results.values()] if t]
+    evidence = _evidence(state, seen)
+    ruled_out = _rule_out(state.ruled_out, state.changes, state.written, evidence, panel, planned)
+    owed = outstanding(state.changes, state.written, ruled_out)
     try:
         plan = planner.run_sync(
             brief(
@@ -291,11 +305,11 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
         ).output
     except UnexpectedModelBehavior:
         if not opening:
-            return {"replans": spent}
+            return {"replans": spent, "ruled_out": ruled_out}
         # The commitments stand. A planner that could not answer has said nothing
         # about them, and dropping what this conversation already owes because one
         # model call failed is the very thing this ledger is here to prevent.
-        return {"plan": "", "policy": excerpt(policy, []), "changes": owed}
+        return {"plan": "", "policy": excerpt(policy, []), "changes": owed, "ruled_out": ruled_out}
     # A re-plan may add to what the turn is working from and may not take away.
     # The objection to moving a plan mid-turn was always that the actor loses the
     # rule it was halfway through applying, and widening rather than replacing is
@@ -308,16 +322,14 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # identifier makes every re-phrasing of one commitment a new one, and the
     # ledger it inflates is the ledger the speaker and the critic both count
     # against -- see `anchored`.
-    changes = anchored(
-        plan.changes,
-        state.observed + [t for t in [state.prompt, *state.tool_results.values()] if t],
-    )
+    changes = anchored(plan.changes, state.observed + seen)
     # Only the customer can change what the customer is asking for. A mid-turn
     # re-plan is a response to a lookup, and a lookup is the one thing that must
     # not be able to rewrite the scope -- it is what narrowed the request to the
     # record it had just returned. Asking the planner not to do that is the
     # instruction; not accepting the answer is the guarantee.
     request = plan.request if opening and plan.request else state.request
+    carried = _widen(state.changes, changes)
     return {
         "request": request,
         "plan": render(plan.model_copy(update={"request": request})),
@@ -329,7 +341,13 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
         # not: it belongs to the request, and the request outlives the turn. A
         # commitment carried here leaves only by being carried out -- see
         # `StewardState.changes`.
-        "changes": _widen(state.changes, changes),
+        "changes": carried,
+        # Again, over what the plan just added. A change is settled the moment it
+        # is written down rather than one node later: the plan that records an
+        # impossible commitment is usually the same plan whose turn then ends,
+        # and a settlement that arrives after the turn is a settlement the speaker
+        # has already held a reply against.
+        "ruled_out": _rule_out(ruled_out, carried, state.written, evidence, panel, planned),
         "replans": spent,
     }
 
@@ -557,7 +575,7 @@ def _sieved(
     return None
 
 
-def _evidence(state: StewardState) -> Evidence:
+def _evidence(state: StewardState, extra: list[str] | None = None) -> Evidence:
     """What the verifiers are allowed to read, assembled from the turn's state.
 
     `looked_up` is rebuilt by pairing each tool call with the result that came
@@ -575,11 +593,68 @@ def _evidence(state: StewardState) -> Evidence:
                 name, arguments = calls[part.tool_call_id]
                 looked_up.append((name, arguments, str(part.content)))
     return Evidence.of(
-        state.observed,
+        state.observed + (extra or []),
         transcript(_history(state)),
         [written.tool for written in state.written],
         looked_up,
     )
+
+
+def _rule_out(
+    ruled_out: list[Written],
+    changes: list[Change],
+    written: list[Written],
+    evidence: Evidence,
+    panel: Panel | None,
+    planned: Planned | None,
+) -> list[Written]:
+    """The settled ledger, with anything newly impossible added to it."""
+    owed = outstanding(changes, written, ruled_out)
+    return ruled_out + _impossible(owed, evidence, panel, planned)
+
+
+def _impossible(
+    owed: list[Change], evidence: Evidence, panel: Panel | None, planned: Planned | None
+) -> list[Written]:
+    """The planned changes a verifier says can never happen.
+
+    The second half of `StewardState.ruled_out`, and the half that makes it fire.
+    A commitment used to leave `changes` only by being carried out or by a
+    verifier refusing the *proposal* -- and the changes that most need settling
+    are the ones nobody ever proposes, because the actor can see perfectly well
+    that they are not allowed. So the ledger kept them for the rest of the
+    conversation and every reader treated them as work outstanding.
+
+    Task 46 is what that costs. The customer wants their insurance refunded and
+    says plainly they do not want the flight cancelled; gold writes nothing. The
+    planner records `cancel_reservation` anyway -- it plans on what was asked for,
+    deliberately, because a planner that refuses on its own lost 24 of 43 gold
+    writes when it tried. Nothing could then take it off the list, so the speaker
+    held the turn five times to make the actor discharge it, and the actor
+    eventually did. One surplus write, and a task that was otherwise handled
+    correctly scored zero.
+
+    The rule is the same one that governs everything allowed to write here:
+    arithmetic over a record, and only where the answer cannot be argued with.
+    `recoverable` findings are ignored -- those say "fix the call", which is not
+    the same as "this can never happen" -- and so is a change whose record is
+    unknown, because there is nothing to read.
+
+    Measured over the two journalled 15x2 runs: 199 settlements, of which **zero**
+    were on a change the answer key actually makes. 134 come from `cancellable`
+    and 65 from `not_yet_flown`.
+    """
+    if panel is None or planned is None:
+        return []
+    settled = []
+    for change in owed:
+        if not change.record:
+            continue
+        call = planned(change.tool, change.record)
+        finding = first(call, evidence, panel)
+        if finding is not None and not finding.recoverable:
+            settled.append(Written.of(change.tool, getattr(call, "arguments", {}) or {}))
+    return settled
 
 
 def _refused(
@@ -792,9 +867,16 @@ def build_graph(
     schemas: dict[str, dict[str, Any]],
     policy: str,
     panel: Panel,
+    planned: Planned | None = None,
 ) -> Any:
     graph = StateGraph(StewardState)
-    graph.add_node("plan", _traced("plan", partial(_plan, planner=planner, policy=policy)))
+    graph.add_node(
+        "plan",
+        _traced(
+            "plan",
+            partial(_plan, planner=planner, policy=policy, panel=panel, planned=planned),
+        ),
+    )
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant, schemas=schemas)))
     graph.add_node(
         "gate",
@@ -866,6 +948,7 @@ class Kernel:
         speaker_model: str | Model | None = None,
         reference: str = "",
         panel: Panel | None = None,
+        planned: Planned | None = None,
     ):
         """`gate_model`, `planner_model` and `speaker_model` let the two critics and
         the planner run on a different model from the actor. All default to the
@@ -890,6 +973,7 @@ class Kernel:
             _schemas(tools),
             policy,
             panel or Panel(),
+            planned,
         )
 
     def new_thread(self) -> str:

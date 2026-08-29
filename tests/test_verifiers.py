@@ -23,6 +23,7 @@ from adapters.tau2.modifications import (
     passenger_count_fixed,
 )
 from adapters.tau2.payment import payment_composition, payment_for_change
+from adapters.tau2.verifiers import PANEL, planned
 from agents.gate import Verdict as _Verdict
 from core.state import PendingCall
 from core.verifiers import Evidence, Finding, Panel, first
@@ -721,3 +722,58 @@ def test_the_critic_may_not_retire_an_obligation_by_calling_it_impossible(monkey
 
     assert out["approved"] == []
     assert out["ruled_out"] == []
+
+
+# --------------------------------------------------- settling a planned change
+
+
+def test_a_planned_cancellation_the_policy_forbids_is_settled_before_it_is_proposed():
+    """Task 46's phantom, which cost a task that was otherwise handled correctly.
+
+    The customer wants their insurance refunded and says plainly they do not want
+    the flight cancelled. The planner records `cancel_reservation` anyway. Nothing
+    could take it off the ledger, so the speaker held the turn five times to make
+    the actor discharge it, and the actor eventually did.
+    """
+    record = json.dumps(
+        {
+            "reservation_id": "H8Q05L",
+            "cabin": "economy",
+            "insurance": "no",
+            "created_at": "2024-01-01T00:00:00",
+            "flights": [{"flight_number": "HAT268", "date": "2024-05-24", "status": "available"}],
+            "passengers": [{}],
+        }
+    )
+    evidence = Evidence.of([record], "Customer: refund my insurance", [], [])
+    finding = first(planned("cancel_reservation", "H8Q05L"), evidence, PANEL)
+    assert finding is not None and finding.check == "cancellable"
+    assert not finding.recoverable, "a settlement must not be something the actor can rewrite"
+
+
+def test_a_planned_change_says_nothing_about_arguments_it_has_not_chosen():
+    """The checks that compare proposed values must fall silent, not fire.
+
+    A planned change carries a record and no values, so `baggage_only_grows` and
+    `flights_changeable` have nothing to object to -- and inventing an objection
+    from an absent argument is how a check starts settling work that was fine.
+    """
+    record = json.dumps(
+        {
+            "reservation_id": "OBUT9V",
+            "cabin": "basic_economy",
+            "total_baggages": 2,
+            "flights": [{"flight_number": "HAT078", "date": "2024-05-27", "status": "available"}],
+            "passengers": [{}],
+        }
+    )
+    evidence = Evidence.of([record], "Customer: add a bag", [], [])
+    finding = first(planned("update_reservation_baggages", "OBUT9V"), evidence, PANEL)
+    assert finding is None or finding.recoverable
+
+
+def test_a_planned_change_on_a_record_nobody_has_read_settles_nothing():
+    """`read_first` is recoverable, so it never settles -- it says look it up."""
+    evidence = Evidence.of([], "Customer: cancel it", [], [])
+    finding = first(planned("cancel_reservation", "ZZZ999"), evidence, PANEL)
+    assert finding is None or finding.recoverable

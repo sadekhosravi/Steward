@@ -50,7 +50,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["Describe", "Evidence", "Finding", "Panel", "Verifier", "first"]
+__all__ = ["Evidence", "Finding", "Panel", "Planned", "Verifier", "first"]
 
 
 @dataclass(frozen=True)
@@ -159,7 +159,6 @@ Verifier = Callable[[object, Evidence], Finding | None]
 # and is then compared by an ordinary verifier. Nothing downstream can tell
 # whether the mapping came from a model or from a file, which is the property that
 # keeps the blocking half deterministic.
-Describe = Callable[[object, Evidence], Mapping[str, Any]]
 
 
 @dataclass
@@ -189,3 +188,11 @@ def first(call: object, evidence: Evidence, panel: Panel) -> Finding | None:
         if finding is not None:
             return finding
     return None
+
+
+# How a change that has not been made yet is turned into the call it would be, so
+# the checks that read only the record can answer it now rather than after the
+# actor has proposed it. Which argument names the record is a fact about a domain,
+# so the adapter supplies this and `core` only calls it -- the same division that
+# keeps `Panel` itself domain-free.
+Planned = Callable[[str, str], Any]

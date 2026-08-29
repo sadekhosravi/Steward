@@ -14,6 +14,7 @@ case in front of it.
 
 from __future__ import annotations
 
+from core.state import PendingCall
 from core.verifiers import Panel
 
 from .cancellable import cancellable
@@ -27,7 +28,7 @@ from .modifications import (
 )
 from .payment import payment_composition, payment_for_change
 
-__all__ = ["PANEL"]
+__all__ = ["PANEL", "planned"]
 
 PANEL = Panel(
     verifiers={
@@ -49,3 +50,20 @@ PANEL = Panel(
         ],
     }
 )
+
+
+def planned(tool: str, record: str) -> PendingCall:
+    """A change nobody has proposed yet, as the call it would be.
+
+    Every write in this domain that lands on an existing record names it in
+    `reservation_id`, so a planned change carries enough for the checks that read
+    the record and nothing else -- `cancellable`, `not_yet_flown`, `read_first`.
+    The ones that compare *proposed* values, like `flights_changeable` and
+    `baggage_only_grows`, see no values and fall silent, which is the right answer:
+    a change with no arguments yet has not decided anything they could object to.
+
+    That is the whole of the trick. A cancellation is completely described by the
+    record it is on, so asking "could this ever be allowed?" of a plan is the same
+    question as asking it of the call.
+    """
+    return PendingCall(id="", name=tool, arguments={"reservation_id": record})

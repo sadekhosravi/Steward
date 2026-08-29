@@ -25,7 +25,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agents.speaker import NOTHING_OWED, UNCHECKED, hold, outstanding
 from core.kernel import DEFERRAL_LIMIT, Act, Kernel, Say
-from core.state import Change, Written
+from core.state import Change, PendingCall, Written
+from core.verifiers import Finding, Panel
 from tests.tools import CANCEL, LOOKUP
 
 SEEN_ID = "HKD3PS"
@@ -598,3 +599,102 @@ def test_a_ruling_on_one_record_leaves_the_others_owed():
 
 def test_nothing_ruled_out_is_the_same_answer_as_before():
     assert outstanding([CHANGE], []) == outstanding([CHANGE], [], []) == [CHANGE]
+
+
+def _always_plans_a_cancellation():
+    """A planner that writes down a cancellation whatever the customer says.
+
+    Task 46, and not a strawman: the customer asks for an insurance refund and
+    says plainly they do not want the flight cancelled. The planner records
+    `cancel_reservation` because the word refund was used. It plans on what was
+    asked for by design -- a planner that refuses on its own lost 24 of 43 gold
+    writes when that was tried.
+    """
+
+    def planner(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return _output(
+            info,
+            goal="The refund is settled.",
+            changes=[
+                Change(tool="cancel_reservation", record="AAA111", what="cancel it").model_dump()
+            ],
+        )
+
+    return planner
+
+
+def _never_allowed(_call, _evidence):
+    """A verifier that says this can never happen, in the shape `_impossible` reads."""
+    return Finding(
+        check="test:forbidden",
+        reason="The policy does not permit this.",
+        remediation="Tell the customer it cannot be done.",
+        recoverable=False,
+    )
+
+
+def test_a_change_that_can_never_happen_stops_being_owed():
+    """The phantom commitment, end to end.
+
+    Without this the change sits in `changes` for the rest of the conversation,
+    `outstanding` never empties, and every reader treats it as work the turn owes
+    -- the speaker holds the reply, the critic is handed it as context. In the
+    15x2 of 2026-08-29 that pressure produced a surplus write on a task whose
+    answer key writes nothing, and the task scored zero.
+    """
+    k = Kernel(
+        [LOOKUP, CANCEL],
+        policy="Cancel only after the customer agrees.",
+        model=FunctionModel(just_talks),
+        gate_model=FunctionModel(approves_writes),
+        planner_model=FunctionModel(_always_plans_a_cancellation()),
+        speaker_model=FunctionModel(allows),
+        panel=Panel(verifiers={"cancel_reservation": [_never_allowed]}),
+        planned=lambda tool, record: PendingCall(
+            id="", name=tool, arguments={"reservation_id": record}
+        ),
+    )
+
+    k.send("t", "refund my insurance, but do not cancel the flight")
+
+    values = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert [w.tool for w in values.get("ruled_out", [])] == ["cancel_reservation"]
+    assert outstanding(values["changes"], values.get("written", []), values["ruled_out"]) == []
+
+
+def test_a_change_that_is_merely_wrong_for_now_stays_owed():
+    """A recoverable finding says "fix the call", which is not "this can never be".
+
+    The distinction is the whole safety of the rule: `read_first` fires on every
+    record nobody has looked at yet, and letting that settle a commitment would
+    discharge the work of any request the actor had not got round to.
+    """
+
+    def not_yet(_call, _evidence):
+        return Finding(
+            check="test:not-yet",
+            reason="Read the record first.",
+            remediation="Look it up.",
+            recoverable=True,
+        )
+
+    k = Kernel(
+        [LOOKUP, CANCEL],
+        policy="Cancel only after the customer agrees.",
+        model=FunctionModel(just_talks),
+        gate_model=FunctionModel(approves_writes),
+        planner_model=FunctionModel(_always_plans_a_cancellation()),
+        speaker_model=FunctionModel(allows),
+        panel=Panel(verifiers={"cancel_reservation": [not_yet]}),
+        planned=lambda tool, record: PendingCall(
+            id="", name=tool, arguments={"reservation_id": record}
+        ),
+    )
+
+    k.send("t", "cancel my booking")
+
+    values = k.graph.get_state({"configurable": {"thread_id": "t"}}).values
+    assert values.get("ruled_out", []) == []
+    assert [c.record for c in outstanding(values["changes"], values.get("written", []), [])] == [
+        "AAA111"
+    ]

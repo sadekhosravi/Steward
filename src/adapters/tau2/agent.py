@@ -31,7 +31,7 @@ from adapters.tau2.ranking import ranked
 from adapters.tau2.reference import reference
 from adapters.tau2.schemas import tighten
 from adapters.tau2.totals import totals
-from adapters.tau2.verifiers import PANEL
+from adapters.tau2.verifiers import PANEL, planned
 from core.kernel import Act, Kernel, Step
 
 
@@ -165,6 +165,7 @@ class StewardAgent(HalfDuplexAgent[AgentState]):
             gate_model,
             reference=reference(declared),
             panel=PANEL,
+            planned=planned,
         )
 
     def get_init_state(self, message_history: list[Message] | None = None) -> AgentState:
