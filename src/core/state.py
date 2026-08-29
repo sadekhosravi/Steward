@@ -203,6 +203,82 @@ class Change(BaseModel):
         return f"{self.tool} on {self.record}" if self.record else self.tool
 
 
+# What a record identifier looks like anywhere, stated as loosely as it can be
+# and still exclude English. Long enough that a year or a day of the month cannot
+# match, and mixed enough that a field name cannot: `OBUT9V` and
+# `sophia_silva_7557` qualify, `reservation_id`, `get_reservation_details`,
+# `2024` and `the` do not. This is a heuristic and is only ever used to *discard*
+# a record the ledger could not have matched on anyway -- see `anchored`.
+TOKEN = re.compile(r"[A-Za-z0-9_]{5,}")
+
+
+def anchored(changes: list[Change], seen: list[str]) -> list[Change]:
+    """Changes with the record reduced to one the conversation has actually seen.
+
+    The planner is asked for the identifier a change lands on, and a good deal of
+    the time it answers with where the identifier is going to come from: "the same
+    reservation id", "reservation_id_from_get_reservation_details", "the
+    reservation ID that matches the Houston-to-Denver return flight on
+    2024-05-27". Every one of those is a different `Change.key`, so a re-plan
+    files each re-phrasing as a *new* commitment rather than recognising the one
+    already held -- and none of them can ever be discharged, because `outstanding`
+    matches an approved call's identifiers against this text and a placeholder
+    contains none.
+
+    Measured over the 15x2 run of 2026-08-29: 38% of the 5,136 ledger entries
+    carried prose here, task 21 ended a conversation owing ten changes that were
+    four, and the ledger only ever grew. That permanent debt is what kept
+    `outstanding` non-empty on every write task, which is what the speaker held
+    122 replies against.
+
+    So a record is kept only where the conversation has seen it -- the same test
+    `invented` puts on a tool call's arguments, for the same reason -- and reduced
+    to `None` otherwise. `None` is not a loss: `outstanding` already falls back to
+    matching on the tool alone, which is the most that can honestly be said about
+    a change whose record nobody knows yet. The last match wins, because a record
+    named after the phrase that introduces it is the shape the planner writes:
+    "the reservation id from get_reservation_details for JG7FMM".
+    """
+    corpus = "\n".join(seen)
+    return [
+        change.model_copy(update={"record": _anchor(change.record, corpus)}) for change in changes
+    ]
+
+
+def _anchor(record: str | None, corpus: str) -> str | None:
+    """The identifier in `record`, or None if there is not one in there.
+
+    A record that is already a bare identifier is kept whether or not anyone has
+    read it yet. Two bookings the customer names in one breath have been read by
+    nobody, and dropping them both would merge two commitments into one -- the
+    exact multi-record failure the ledger was built to stop. Nothing is risked by
+    keeping one: `outstanding` still needs an approved call that names it, so an
+    identifier the planner invented simply stays owed, which is the safe way for
+    this to be wrong.
+
+    Where the record is prose, the conversation has to settle which of its words
+    is the identifier, because "the reservation for 2024-05-27" and "the
+    reservation_id from get_reservation_details" both contain tokens that would
+    otherwise pass for one.
+    """
+    if not record:
+        return None
+    if _identifierish(record.strip()):
+        return record.strip()
+    found = [token for token in TOKEN.findall(record) if _identifierish(token) and token in corpus]
+    return found[-1] if found else None
+
+
+def _identifierish(token: str) -> bool:
+    """Long enough that a year cannot match, mixed enough that a field name cannot."""
+    return (
+        len(token) >= 5
+        and TOKEN.fullmatch(token) is not None
+        and any(c.isdigit() for c in token)
+        and any(c.isalpha() for c in token)
+    )
+
+
 class Written(BaseModel):
     """A gated call the gate approved, as the ledger remembers it.
 

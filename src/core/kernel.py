@@ -104,6 +104,7 @@ from core.state import (
     PendingCall,
     StewardState,
     Written,
+    anchored,
     answered,
     pruned,
 )
@@ -302,6 +303,15 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
     # which a planner that has decided the job is done would otherwise drop and
     # silently disarm the speaker.
     sections = plan.policy_sections if opening else _widen(state.sections, plan.policy_sections)
+    # Before anything is widened, because widening keys on `Change.key` and the
+    # key is built from the record. A placeholder the planner wrote instead of an
+    # identifier makes every re-phrasing of one commitment a new one, and the
+    # ledger it inflates is the ledger the speaker and the critic both count
+    # against -- see `anchored`.
+    changes = anchored(
+        plan.changes,
+        state.observed + [t for t in [state.prompt, *state.tool_results.values()] if t],
+    )
     # Only the customer can change what the customer is asking for. A mid-turn
     # re-plan is a response to a lookup, and a lookup is the one thing that must
     # not be able to rewrite the scope -- it is what narrowed the request to the
@@ -319,7 +329,7 @@ def _plan(state: StewardState, planner: Agent[None, Plan], policy: str) -> dict[
         # not: it belongs to the request, and the request outlives the turn. A
         # commitment carried here leaves only by being carried out -- see
         # `StewardState.changes`.
-        "changes": _widen(state.changes, plan.changes),
+        "changes": _widen(state.changes, changes),
         "replans": spent,
     }
 

@@ -7,9 +7,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from core.kernel import Kernel
 from core.state import (
+    Change,
     Demand,
     Obligation,
     StewardState,
+    anchored,
     answered,
     duplicated,
     pruned,
@@ -324,3 +326,91 @@ def test_a_demand_made_this_turn_is_not_answered_by_the_message_that_provoked_it
 
     assert given == []
     assert standing == _standing(turn=2)
+
+
+# ---------------------------------------------------------------- anchored
+
+
+def test_a_placeholder_record_is_reduced_to_nothing():
+    """The defect: the planner writes where the id will come from, not the id.
+
+    Each phrasing is a different `Change.key`, so widening files each one as a
+    new commitment and none of them can ever be discharged.
+    """
+    changes = [
+        Change(tool="cancel_reservation", record="the same reservation id", what="cancel it"),
+        Change(tool="cancel_reservation", record="reservation_id_from_get_reservation_details"),
+        Change(tool="cancel_reservation", record="the reservation id from get_reservation_details"),
+    ]
+    assert {c.record for c in anchored(changes, ["nothing useful here"])} == {None}
+    assert len({c.key for c in anchored(changes, ["nothing useful here"])}) == 1
+
+
+def test_an_identifier_the_conversation_has_seen_is_kept():
+    seen = ['{"reservation_id": "OBUT9V", "cabin": "economy"}']
+    (change,) = anchored([Change(tool="cancel_reservation", record="OBUT9V")], seen)
+    assert change.record == "OBUT9V"
+
+
+def test_an_identifier_wrapped_in_where_it_came_from_is_unwrapped():
+    """The shape `_covers` grew its containment match for, settled here instead."""
+    seen = ['{"reservation_id": "JG7FMM"}']
+    (change,) = anchored(
+        [Change(tool="cancel_reservation", record="the reservation id from the lookup for JG7FMM")],
+        seen,
+    )
+    assert change.record == "JG7FMM"
+
+
+def test_a_bare_identifier_nobody_has_read_yet_is_still_kept():
+    """Two bookings named in one breath have been read by nobody.
+
+    Dropping them both would merge two commitments into one, which is the
+    multi-record failure the ledger exists to stop. An invented identifier is the
+    safe way to be wrong here: it stays owed rather than being discharged.
+    """
+    changes = anchored(
+        [
+            Change(tool="cancel_reservation", record="AAA111"),
+            Change(tool="cancel_reservation", record="BBB222"),
+        ],
+        ["nobody has looked anything up"],
+    )
+    assert [c.record for c in changes] == ["AAA111", "BBB222"]
+    assert len({c.key for c in changes}) == 2
+
+
+def test_a_field_name_is_not_an_identifier_even_though_it_is_in_every_record():
+    """`reservation_id` occurs in the text of every reservation ever read."""
+    seen = ['{"reservation_id": "OBUT9V"}']
+    for prose in ("reservation_id", "get_reservation_details", "new_reservation_id"):
+        (change,) = anchored([Change(tool="cancel_reservation", record=prose)], seen)
+        assert change.record is None, prose
+
+
+def test_a_date_in_the_description_is_not_mistaken_for_the_record():
+    """The one that forces the letter-and-digit rule: 2024 is in every record."""
+    seen = ['{"reservation_id": "OBUT9V", "date": "2024-05-27"}']
+    (change,) = anchored(
+        [Change(tool="update_reservation_flights", record="the reservation for 2024-05-27")], seen
+    )
+    assert change.record is None
+
+
+def test_two_records_named_plainly_stay_two_commitments():
+    """Anchoring must not collapse a multi-record request into one change."""
+    seen = ['{"reservation_id": "8C8K4E"}', '{"reservation_id": "UDMOP1"}']
+    changes = anchored(
+        [
+            Change(tool="cancel_reservation", record="8C8K4E"),
+            Change(tool="cancel_reservation", record="UDMOP1"),
+        ],
+        seen,
+    )
+    assert len({c.key for c in changes}) == 2
+
+
+def test_the_original_changes_are_not_mutated():
+    original = Change(tool="cancel_reservation", record="the same reservation id")
+    anchored([original], [])
+    assert original.record == "the same reservation id"
