@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+from adapters.tau2.agent import _noted
 from adapters.tau2.verifiers import PANEL
 from core.state import PendingCall
 from core.verifiers import Evidence, first
@@ -34,15 +35,23 @@ WRITES = {
 
 
 def text_of(result):
-    """A tool result as tau2 serialises it -- pydantic's JSON, not a repr."""
+    """A tool result as the verifiers actually receive it.
+
+    Serialised the way tau2 does, and then put through `_noted`, which is what
+    the adapter does to every result before it reaches `observed`. Replaying the
+    raw return instead was how this file certified a tier that could not read a
+    single record in production: the notes are not decoration on the way to a
+    person, they are the shape `Evidence` is made of.
+    """
     if isinstance(result, str):
-        return result
+        return _noted(result)
     try:
         from pydantic_core import to_json
 
-        return to_json(result).decode()
+        text = to_json(result).decode()
     except Exception:
-        return json.dumps(result, default=str)
+        text = json.dumps(result, default=str)
+    return _noted(text)
 
 
 def _read(environment, identifier, observed, looked_up):

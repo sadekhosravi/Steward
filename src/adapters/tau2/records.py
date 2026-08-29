@@ -16,6 +16,7 @@ skipped rather than mangled. Order matters in one place: a reservation carries a
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 __all__ = ["reservations", "statuses", "users"]
@@ -103,10 +104,38 @@ def _rows(result: Any) -> list[dict]:
     return []
 
 
+# What separates a record with a note stapled to it from a result that merely
+# starts with digits. Every note in `agent.NOTES` appends a blank line and then an
+# upper-case heading -- `WHAT THIS RESERVATION COSTS`, `PAYING FOR THIS` -- so
+# that is the only tail this accepts. `2024-05-15` would otherwise parse as the
+# number 2024 with a remainder nobody looked at, and two records run together
+# would parse as the first with the second discarded silently.
+NOTED = re.compile(r"\n\n[A-Z]")
+
+
 def _loaded(text: Any) -> Any:
+    """The JSON record a tool result carries, notes and all, or None.
+
+    `json.loads` is not enough and never was. The results reaching `observed` are
+    the ones `adapters.tau2.agent._noted` has already appended English to, so
+    every reservation and every profile in a real conversation arrives as valid
+    JSON followed by a blank line and a paragraph -- which `loads` rejects whole.
+    That failure was silent, and it made every verifier reading this module blind
+    to every record: measured over a 28-simulation run, 0 of the 72 reservations
+    the agent had read were visible here, and `intended.read_first` refused 56
+    writes on records sitting in the transcript in front of it.
+
+    So the leading value is parsed and the tail is checked rather than ignored.
+    Accepting any tail would trade one silent failure for another.
+    """
     if not isinstance(text, str):
         return text
+    body = text.lstrip()
     try:
-        return json.loads(text)
-    except (ValueError, TypeError):
+        value, end = json.JSONDecoder().raw_decode(body)
+    except ValueError:
         return None
+    rest = body[end:]
+    if rest.strip() and not NOTED.match(rest):
+        return None
+    return value
