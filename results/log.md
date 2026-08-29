@@ -37,6 +37,16 @@ not comparable to one that lost none.
 | arm A `ab_steward_50x3` | Part 4 sieve `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
 | cell 1 `gateoff_ef6cffd_50x3` | `ef6cffd` + `STEWARD_GATE=off`: nothing gating | 3 | 0.420 ±0.031 | 0.420 | 0.273 | 0.220 | — | 147/150 |
 | cell 2 `sievegate_73ad27f_50x3` | `73ad27f` + `STEWARD_GATE=on`: **sieve and critic together** | 3 | **0.500 ±0.027** | 0.500 | 0.393 | 0.340 | — | 150/150 |
+| `final50x3` | `bdf1f3e`: sieve and critic, consent ledger, records seam fixed | 3 | 0.540 ±0.023 | 0.540 | 0.460 | 0.420 | — | 150/150 |
+| `steps1234_50x3` | `ea1e6ac`: gate given the request, the consent, and the provenance | 3 | **0.560 ±0.023** | 0.560 | 0.460 | 0.400 | — | 150/150 |
+
+The last two rows' Pass^k are computed with tau2's own formula,
+`comb(successes, k) / comb(trials, k)` averaged over tasks
+(`tau2/metrics/agent_metrics.py:113`). `scripts/score.py` uses "the first k
+trials all passed", which is a different and wrong quantity -- on
+`steps1234_50x3` it prints Pass^1 0.580 against the true 0.560. Every Pass^k
+above these two rows is `scripts/score.py`'s number and is not comparable to
+them.
 
 `speaker_49` started at 01:57 on 08-23 and the SPEAKER commit landed at 02:54, so
 either the name is aspirational or the work was in the tree uncommitted. Which one
@@ -770,3 +780,42 @@ evidence. A volatile task moving is not. And a run whose headline sits above
 or below 0.414 has said nothing until the per-task rows are read: `all_parts_50`
 scored 0 on tasks 2 and 6, which average 0.62 and 0.50, and 1.0 on task 22,
 which averages 0.06.
+
+## `steps1234_50x3` — what the gate was given
+
+Commit `ea1e6ac`, `STEWARD_GATE=on`, seed 626729, 50 tasks × 3 trials, all 150
+scored. Four changes, all to what the critic sees or is told, none to the
+deterministic panel:
+
+1. a "yes" to the assistant's *own* question is now filed as consent, so the
+   first confirmation is no longer invisible to the gate;
+2. the customer's request, at their scope, is shown above the proposed action;
+3. every identifier in the proposal is labelled by whether the customer named it
+   themselves or it appeared only in a lookup result;
+4. the instructions name two authorities, the policy *and* the request, and the
+   scope bullet is promoted out of the block list into the framing.
+
+Paired against `final50x3` (`bdf1f3e`) on all 150 shared simulations:
+
+| | reward | DB | COMMUNICATE | writes/sim | gold-write recall | surplus/sim |
+|---|---|---|---|---|---|---|
+| before `bdf1f3e` | 0.540 | 0.553 | 0.907 | 0.91 | 49/147 (33.3%) | 0.41 |
+| after `ea1e6ac` | 0.560 | 0.580 | 0.900 | 0.88 | 52/147 (35.4%) | 0.37 |
+
+**+0.020 ± 0.073** (0.5 SE), 17 better / 14 worse / 119 unchanged, sign test
+p = 0.72. **Unproven**, and the design cannot prove anything smaller than about
++0.09.
+
+What did move, and in the predicted direction: zero-write tasks that wrote
+anyway fell **8 → 5**, surplus writes per simulation 0.41 → 0.37, DB +0.027.
+COMMUNICATE fell 0.907 → 0.900 and ate part of it. Gold-write recall moved 2
+points, which is inside its own noise.
+
+The offline corpus predicted +3.6 clean simulations with a CI of [+1.3, +5.9];
+the run delivered +3. That is the first time the offline proxy and the benchmark
+have agreed, which makes the corpus worth more than this run's headline does.
+
+**The gate is now close to spent.** 95 of 147 gold writes never reached the
+database, and on the previous run only 23 of those were writes the gate refused
+-- the rest were never proposed by anyone. That is planner and actor territory,
+and there is no offline corpus for it yet.
