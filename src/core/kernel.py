@@ -611,6 +611,14 @@ def _evidence(state: StewardState) -> Evidence:
         transcript(_history(state)),
         [written.tool for written in state.written],
         looked_up,
+        # `owed` last because it is the one thing here that is about the turn
+        # rather than the world. Computed the same way the speaker computes it,
+        # from the same two ledgers, so the two guards on the two exits from a
+        # turn cannot come to different answers about what is left to do.
+        owed=[
+            (change.tool, change.record)
+            for change in outstanding(state.changes, state.written, state.ruled_out)
+        ],
     )
 
 
