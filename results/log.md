@@ -380,6 +380,56 @@ the customer had already answered. What the run says is that neither reaches
 reward, because the binding constraint is not that the assistant is refused too
 often. It is that the assistant does not try.
 
+### The handoff verifier: built, measured live, reverted
+
+The one lever the abstention finding seemed to leave open. Splitting arm C's 51
+transfers by whether the task needed a write at all is as clean a separation as
+this corpus offers:
+
+    transfers on tasks needing no write   41, of which 41 scored 1.00
+    transfers on tasks needing a write    10, of which  9 scored 0.00
+
+So a deterministic check was written to refuse a handoff while a planned change
+was still outstanding -- the rule `agents.gate` already states in prose and let
+ten through anyway. Whether the customer had asked for a person was tested first
+and discarded: true in 12 of the 51, and it separates nothing.
+
+It does not work, and the reason is worth keeping. **The predicate the check can
+actually see is not the predicate that was scored.** Offline, "is a change owed"
+was stood in for by ground truth -- does gold make a write on this task. Live,
+it is `outstanding(state.changes, ...)`, and the planner records a change
+whenever the *customer asks* for one, including on tasks where the answer is that
+the policy forbids it. Task 13 is the proof: its gold action *is* a transfer, the
+customer opens by asking for a cancellation, the planner writes
+`cancel_reservation` into the ledger, and the check then reads a correct handoff
+as abandonment.
+
+Measured over a 15-task, 2-trial run with the decision journal on (28 of 30
+simulations completed before it was stopped):
+
+| | fired | outcome |
+|---|---|---|
+| simulations where transferring is correct | **9** | 1.000 -> 0.938 |
+| simulations where it abandoned work | **9** | 0.083 -> 0.000 |
+
+Nine each way is no signal, and it is exactly the failure this package was built
+to escape -- `core.verifiers` opens by describing the critic as "a roughly
+uniform refusal rate applied to everything", and this reproduced it in code with
+fewer words. It cost one simulation, converted none, and added 35% to wall clock
+(494s against 366s per simulation). Reverted in `1d0da84`.
+
+Two things found on the way that outlive it:
+
+- **`state.ruled_out`** stays. A change the policy forbids used to be owed for
+  the rest of the conversation, so the planner, the critic and the speaker were
+  all reasoning from a debt that could never be paid.
+- **The decision journal is what settled this**, and it settled it in 25 minutes
+  against a hypothesis that two separate offline replays had endorsed. Every
+  measurement above this line was computed from tau2's saved trajectories, which
+  contain only what left the system -- a refused proposal never becomes a tool
+  call. That blind spot is what let a check with no discriminating power get
+  built, tested, and shipped with a zero-false-block claim attached.
+
 ### A note on the Pass^k columns
 
 The table above reports `scripts/score.py`'s estimator, "the first k trials all
