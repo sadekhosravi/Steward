@@ -430,6 +430,99 @@ Two things found on the way that outlive it:
   call. That blind spot is what let a check with no discriminating power get
   built, tested, and shipped with a zero-false-block claim attached.
 
+### The verifier tier had never once read a record
+
+The journal was opened to settle a question about handoffs and answered a much
+larger one. `records._loaded` called `json.loads` on a tool result that
+`adapters/tau2/agent.py:_noted` had already appended English to -- the money
+card, the baggage card, the eligibility card, the search comparison. It raised
+`Extra data` and returned `None`, silently, on every record in every
+conversation the sieve has ever run.
+
+Measured over the 15x2 run of 2026-08-29 (28 scored simulations, 2,293 journal
+records):
+
+| | |
+|---|---|
+| reservations the agent read | 72 |
+| reservations visible to `records.reservations()` | **0** |
+| threads affected | 29 of 31 |
+| write proposals reaching the gate | 151 |
+| approved | **11 (7%)** |
+| refused | 140 (93%) |
+| refusals from `read_first`, on records already read | **56, all false** |
+| simulations in which `read_first` fired | 5 -- **every one scored 0.0** |
+
+The consequences ran both ways at once. `intended.read_first` fired on every
+write, because no record was ever visible to it; and `cancellable`,
+`not_yet_flown`, the three `modifications` checks and `compensation` returned
+`None` on every proposal, because none of them could see a record either. So the
+deterministic tier -- the centrepiece of Part 4 -- was in production exactly one
+check, and that check was wrong 100% of the time. `context.facts` was handed to
+the critic as "No record for this has been read" on all 63 of its refusals, which
+is why it spent them re-deriving cancellation eligibility from prose.
+
+`read_first`'s remediation is `recoverable`, so the Kernel appends `SELF_FIX` and
+sends the actor straight back to fix something already correct. Task 19 trial 0,
+verbatim:
+
+    gate  get_reservation_details(Z7GOZK)     ALLOW
+    gate  update_reservation_flights(Z7GOZK)  DENY: Nothing ... has read reservation Z7GOZK
+    gate  get_reservation_details(Z7GOZK)     ALLOW
+    gate  update_reservation_flights(Z7GOZK)  DENY: Nothing ... has read reservation Z7GOZK
+    gate  update_reservation_flights(Z7GOZK)  DENY: ...
+
+19 write proposals, 19 refusals, 16 turns, reward 0.0. Z7GOZK was refused 25
+times, OBUT9V 20, 8C8K4E 11. **"The model does not act" was never true.** The
+actor proposed 151 writes and the gate destroyed 140 of them.
+
+It survived because both halves were tested apart. `test_verifiers_against_gold`
+and `scripts/gate_bench.py` both replay the *raw* environment return, a shape
+production never produces, so 49/49 gold and "8 surplus caught" were certified
+against data that does not exist. Every number this log records about the sieve's
+precision was measured on that shape and says nothing about the runs.
+
+Replaying the run's own 94 gated proposals through the fixed panel: `read_first`
+fires 0 times, 81 of 94 records are visible, and the five checks that had never
+executed refuse 10 proposals -- 6 `cancellable`, 3 `flights_changeable`, 1
+`not_yet_flown`. Tasks 19 and 21, the two worst livelocks, clear the sieve
+entirely.
+
+Fixed in `cf5262f`: the leading JSON value is parsed with `raw_decode` and the
+tail is checked rather than ignored -- a blank line then an upper-case heading is
+a note, anything else is refused, because bare `raw_decode` reads `2024-05-15` as
+2024 and two records run together as the first. `tests/test_records.py` pins
+every result shape a real run emits, and the gold replay now goes through
+`_noted` (still 49/49).
+
+**Nothing here is a score claim.** The fix removes 56 false refusals and switches
+on five checks that have never been observed live. The write half of the
+benchmark -- 2 of 14 here -- is where the headroom is, and it has been gated shut
+for the whole life of the sieve. It has to be re-run before anything is claimed.
+
+### The planner's ledger owed the same change eight times over
+
+Found in the same journal. `Change.record` is meant to be an identifier, and 38%
+of the 5,136 ledger entries carry prose instead: "the same reservation id",
+"reservation_id_from_get_reservation_details", "the reservation ID that matches
+the Houston-to-Denver return flight on 2024-05-27". Each phrasing is a different
+`Change.key`, so `_widen` files every re-wording as a new commitment, and none of
+them can ever be discharged -- `outstanding` matches an approved call's
+identifiers against this text and a placeholder contains none. The ledger only
+grew: task 21 ended owing ten changes that were four; across the run, 100 held
+entries were 76 real targets.
+
+That permanent debt is what kept `outstanding` non-empty on every write task,
+which is what the speaker held 122 replies against (18 followed by an approved
+write, ~15%), and what made the reverted handoff verifier fire on nine correct
+transfers. The handoff verifier was not wrong about the ledger; the ledger was
+wrong.
+
+Fixed in `49414eb`. A bare identifier is kept whether or not anyone has read it,
+because two bookings named in one breath have been read by nobody and dropping
+both would merge two commitments into one -- `test_speaker` caught exactly that
+when the first version of the rule was too eager.
+
 ### A note on the Pass^k columns
 
 The table above reports `scripts/score.py`'s estimator, "the first k trials all
