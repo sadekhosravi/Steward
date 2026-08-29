@@ -29,6 +29,7 @@ can compute and says plainly that the choice belongs to the conversation.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any
 
 __all__ = ["ranked"]
@@ -56,8 +57,13 @@ def ranked(content: str) -> str:
     options = _options(content)
     if len(options) < MINIMUM:
         return content
-    lines = [_by_cabin(options, cabin) for cabin in _cabins(options)]
-    lines = [line for line in lines if line] or [NOTHING_COMPARABLE]
+    lines = [
+        line
+        for cabin in _cabins(options)
+        for line in (_by_cabin(options, cabin), _by_duration(options, cabin))
+        if line
+    ]
+    lines = lines or [NOTHING_COMPARABLE]
     departures = _by_departure(options)
     if departures:
         lines.append(departures)
@@ -89,9 +95,52 @@ def _options(content: str) -> list[dict[str, Any]]:
                 "prices": _totals(legs),
                 "seats": _scarcest(legs),
                 "departs": legs[0].get("scheduled_departure_time_est"),
+                "minutes": _elapsed(legs),
             }
         )
     return options
+
+
+def _elapsed(legs: list[dict[str, Any]]) -> int | None:
+    """How long the whole option takes, gate to gate, layovers included.
+
+    The customer's word for this is "fastest", and it is the one comparison the
+    result cannot be read for by eye: an itinerary's duration is its last leg's
+    arrival minus its first leg's departure, and both are buried in different
+    rows. Task 21 asked for the fastest return on a date and the run took the
+    slowest of five -- the one printed first -- while gold took the fastest with
+    seats in the cabin. Price and departure were already computed here; this was
+    the missing third.
+
+    Dates are used when the legs carry them, because an overnight connection is a
+    real itinerary and its duration is not a clock arithmetic puzzle. Without
+    them a landing before takeoff is read as crossing midnight, which is the only
+    reading available and is right for every same-day option.
+    """
+    first, last = (
+        legs[0].get("scheduled_departure_time_est"),
+        legs[-1].get("scheduled_arrival_time_est"),
+    )
+    if not isinstance(first, str) or not isinstance(last, str):
+        return None
+    start = _when(legs[0].get("date"), first)
+    end = _when(legs[-1].get("date"), last)
+    if start is None or end is None:
+        return None
+    if end < start:
+        end += timedelta(days=1)
+    return int((end - start).total_seconds() // 60)
+
+
+def _when(date: Any, clock: str) -> datetime | None:
+    """A leg's time as a moment, dated where the row says and undated otherwise."""
+    stamp = str(date) if isinstance(date, str) else "1900-01-01"
+    for shape in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(f"{stamp} {clock}", shape)
+        except ValueError:
+            continue
+    return None
 
 
 def _totals(legs: list[dict[str, Any]]) -> dict[str, float]:
@@ -138,6 +187,34 @@ def _by_cabin(options: list[dict[str, Any]], cabin: str) -> str:
     ordered = sorted(available, key=lambda option: option["prices"][cabin])
     priced = ", ".join(f"{o['name']} ${_money(o['prices'][cabin])}" for o in ordered)
     return f"  by {cabin} price: {priced}"
+
+
+def _by_duration(options: list[dict[str, Any]], cabin: str) -> str:
+    """One cabin's options, quickest first, sold-out ones dropped.
+
+    Per cabin and not once for the lot, because the seat filter is what makes
+    this answer right. Task 21's two quickest itineraries have no economy seats
+    at all; ranked without the filter this recommends one of them, and gold --
+    the quickest that can actually be booked -- comes third.
+    """
+    available = [
+        option
+        for option in options
+        if cabin in option["prices"]
+        and option["seats"].get(cabin, 1) > 0
+        and option["minutes"] is not None
+    ]
+    if len(available) < MINIMUM:
+        return ""
+    ordered = sorted(available, key=lambda option: option["minutes"])
+    listed = ", ".join(f"{o['name']} {_hours(o['minutes'])}" for o in ordered)
+    return f"  by {cabin} duration: {listed}"
+
+
+def _hours(minutes: int) -> str:
+    """`6h`, `6h30m`. Written for a reader comparing two of them at a glance."""
+    hours, rest = divmod(minutes, 60)
+    return f"{hours}h{rest:02d}m" if rest else f"{hours}h"
 
 
 def _by_departure(options: list[dict[str, Any]]) -> str:

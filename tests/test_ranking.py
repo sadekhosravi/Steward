@@ -12,14 +12,14 @@ import json
 from adapters.tau2.ranking import ranked
 
 
-def flight(number, economy, business=999, seats=None, departs="09:00:00"):
+def flight(number, economy, business=999, seats=None, departs="09:00:00", arrives="15:00:00"):
     return {
         "flight_number": number,
         "origin": "JFK",
         "destination": "SEA",
         "status": "available",
         "scheduled_departure_time_est": departs,
-        "scheduled_arrival_time_est": "15:00:00",
+        "scheduled_arrival_time_est": arrives,
         "date": None,
         "available_seats": seats or {"economy": 5, "business": 5},
         "prices": {"economy": economy, "business": business},
@@ -155,3 +155,107 @@ def test_a_failed_call_is_passed_through_untouched():
     )
 
     assert (_tool_results(message) or {})["1"] == "Error: Reservation not found"
+
+
+# ------------------------------------------------------------------ duration
+
+
+def test_the_quickest_is_named_first():
+    """Task 21's ask, in one line: "the fastest possible on May 27"."""
+    rows = [
+        flight("SLOW", 100, departs="04:00:00", arrives="20:00:00"),
+        flight("QUICK", 300, departs="14:00:00", arrives="20:00:00"),
+        flight("MIDDLING", 200, departs="04:00:00", arrives="16:00:00"),
+    ]
+    line = next(row for row in ranked(json.dumps(rows)).splitlines() if "economy duration" in row)
+    assert line.index("QUICK") < line.index("MIDDLING") < line.index("SLOW")
+    assert "QUICK 6h" in line
+
+
+def test_the_quickest_option_with_no_seats_is_not_the_answer():
+    """Task 21 exactly. Its two quickest itineraries have no economy seats, and
+    gold is the quickest that can actually be booked. Without the seat filter
+    this recommends a flight the actor cannot buy."""
+    rows = [
+        flight(
+            "FASTEST",
+            90,
+            seats={"economy": 0, "business": 5},
+            departs="11:00:00",
+            arrives="16:00:00",
+        ),
+        flight("GOLD", 300, departs="14:00:00", arrives="20:00:00"),
+        flight("SLOW", 100, departs="04:00:00", arrives="20:00:00"),
+    ]
+    line = next(row for row in ranked(json.dumps(rows)).splitlines() if "economy duration" in row)
+    assert "FASTEST" not in line
+    assert line.index("GOLD") < line.index("SLOW")
+
+
+def test_an_itinerary_is_timed_from_first_departure_to_last_arrival():
+    """ "Including layovers", which is what task 44's customer asked for."""
+    first = flight("LEG1", 50, departs="08:00:00", arrives="10:00:00")
+    second = flight("LEG2", 50, departs="14:00:00", arrives="16:00:00")
+    other = [
+        flight("LEG3", 50, departs="08:00:00", arrives="09:00:00"),
+        flight("LEG4", 50, departs="09:30:00", arrives="11:00:00"),
+    ]
+    line = next(
+        row
+        for row in ranked(json.dumps([[first, second], other])).splitlines()
+        if "economy duration" in row
+    )
+    assert "LEG1+LEG2 8h" in line
+    assert "LEG3+LEG4 3h" in line
+    assert line.index("LEG3") < line.index("LEG1")
+
+
+def test_a_landing_before_takeoff_is_read_as_crossing_midnight():
+    rows = [
+        flight("REDEYE", 100, departs="22:00:00", arrives="02:00:00"),
+        flight("DAY", 100, departs="09:00:00", arrives="15:00:00"),
+    ]
+    line = next(row for row in ranked(json.dumps(rows)).splitlines() if "economy duration" in row)
+    assert "REDEYE 4h" in line and "DAY 6h" in line
+
+
+def test_dates_are_used_when_the_rows_carry_them():
+    """An overnight connection is a real itinerary, not clock arithmetic."""
+    first = dict(flight("OUT", 50, departs="20:00:00", arrives="23:00:00"), date="2024-05-20")
+    second = dict(flight("BACK", 50, departs="06:00:00", arrives="09:00:00"), date="2024-05-21")
+    same = [
+        dict(flight("A", 50, departs="08:00:00", arrives="09:00:00"), date="2024-05-20"),
+        dict(flight("B", 50, departs="10:00:00", arrives="12:00:00"), date="2024-05-20"),
+    ]
+    line = next(
+        row
+        for row in ranked(json.dumps([[first, second], same])).splitlines()
+        if "economy duration" in row
+    )
+    assert "OUT+BACK 13h" in line
+    assert "A+B 4h" in line
+
+
+def test_a_row_with_no_times_is_left_out_rather_than_guessed_at():
+    rows = [
+        flight("TIMED", 100, departs="09:00:00", arrives="12:00:00"),
+        flight("ALSOTIMED", 100, departs="09:00:00", arrives="11:00:00"),
+        {k: v for k, v in flight("UNTIMED", 100).items() if k != "scheduled_arrival_time_est"},
+    ]
+    line = next(row for row in ranked(json.dumps(rows)).splitlines() if "economy duration" in row)
+    assert "UNTIMED" not in line
+    assert "ALSOTIMED" in line and "TIMED" in line
+
+
+def test_price_and_duration_disagree_and_both_are_offered():
+    """The point of computing rather than recommending: the cheapest is not the
+    quickest, and which one the customer wants is in the dialogue."""
+    rows = [
+        flight("CHEAP_SLOW", 100, departs="04:00:00", arrives="20:00:00"),
+        flight("DEAR_QUICK", 400, departs="14:00:00", arrives="20:00:00"),
+    ]
+    out = ranked(json.dumps(rows))
+    price = next(row for row in out.splitlines() if "economy price" in row)
+    duration = next(row for row in out.splitlines() if "economy duration" in row)
+    assert price.index("CHEAP_SLOW") < price.index("DEAR_QUICK")
+    assert duration.index("DEAR_QUICK") < duration.index("CHEAP_SLOW")
