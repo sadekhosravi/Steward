@@ -67,7 +67,12 @@ def open_at(path: str) -> bool:
     if _file is not None:
         return True
     try:
-        _file = Path(path).open("a", encoding="utf-8")
+        # Line buffered. A benchmark run is the thing most likely to be killed
+        # part way through and the thing whose tail is most worth having: the
+        # 15x2 of 2026-08-29 was stopped by hand and lost whatever was still in
+        # an 8KB buffer. One line per node is a small enough write that flushing
+        # each one costs nothing against a model call.
+        _file = Path(path).open("a", encoding="utf-8", buffering=1)
     except OSError:
         return False
     return True
