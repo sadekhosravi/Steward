@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 
 import pytest
 from dotenv import find_dotenv, load_dotenv
@@ -33,8 +34,12 @@ from workflows.airline import (
     CANCEL,
     CHANGE_CABIN,
     CHANGE_FLIGHTS,
+    REPLACE,
     STANDING,
 )
+
+# A snake_case token: the shape a tool name has.
+TOKEN = re.compile("[a-z]+(?:_[a-z]+){1,3}")
 
 POLICY = """
 # Toy Policy
@@ -227,6 +232,79 @@ def test_the_four_cancellation_conditions_are_four_separate_alternatives():
 def test_the_only_hard_stop_on_a_cancellation_is_a_flown_segment():
     assert len(CANCEL.blocks) == 1
     assert "already been flown" in CANCEL.blocks[0].quote
+
+
+def test_no_workflow_names_a_tool_the_domain_does_not_have():
+    """The critic read "Change the cabin on a reservation" as a procedure, found no
+    call named anywhere in the workflows, invented `modify_flight_cabin`, and refused
+    four correct calls telling the actor to use it. Zero such refusals in the 1482
+    gate decisions before this text existed. Any snake_case token that looks like a
+    tool has to be one."""
+    from tau2.domains.airline.environment import get_environment
+
+    real = {tool.name for tool in get_environment().get_tools()}
+    blob = " ".join(rule.statement for w in AIRLINE for rule in w.cited)
+    written = TOKEN.findall(blob)
+    # Only tokens that name an action, not prose like "basic_economy".
+    verbs = (
+        "get_",
+        "search_",
+        "book_",
+        "update_",
+        "cancel_",
+        "send_",
+        "transfer_",
+        "list_",
+        "calculate_",
+        "modify_",
+        "change_",
+        "edit_",
+    )
+    named = {w for w in written if w.startswith(verbs)}
+
+    assert named, "the workflows should name at least one tool"
+    assert named <= real, f"invented tools: {sorted(named - real)}"
+
+
+def test_a_cabin_change_says_which_call_makes_it():
+    """The gap the invention filled: no workflow named a write tool at all."""
+    said = " ".join(rule.statement for rule in CHANGE_CABIN.cited)
+
+    assert "update_reservation_flights" in said
+    assert "no separate cabin tool" in said
+
+
+def test_every_route_replace_closes_names_the_route_it_opens():
+    """Tasks 14, 23 and 29. Each of these rules read on its own is a refusal --
+    which is how they were being read, and how three requests were lost. Under
+    this workflow every one of them has to say what to do instead."""
+    for rule in REPLACE.blocks:
+        statement = rule.statement.lower()
+        assert "cancel" in statement and "book" in statement, rule.statement
+
+
+def test_replace_covers_the_five_changes_an_update_cannot_make():
+    quotes = " ".join(rule.quote for rule in REPLACE.blocks)
+
+    assert len(REPLACE.blocks) == 5
+    for condition in (
+        "Basic economy flights cannot be modified",
+        "can change cabin without changing the flights",
+        "origin, destination, and trip type",
+        "cannot modify the number of passengers",
+        "cannot add insurance after initial booking",
+    ):
+        assert condition in quotes
+
+
+def test_replace_will_not_let_the_re_booking_justify_the_cancellation():
+    """The cancellation still has to meet one of the four conditions. Needing a
+    different itinerary is not one of them, and a route that forgot to say so
+    would turn every awkward change into a cancellation."""
+    grounds = " ".join(rule.statement for rule in REPLACE.rules)
+
+    assert "stand on its own grounds" in grounds
+    assert "cancel_reservation first, then book_reservation" in grounds
 
 
 # --- how they are rendered ---------------------------------------------------

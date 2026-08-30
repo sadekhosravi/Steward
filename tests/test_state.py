@@ -15,6 +15,8 @@ from core.state import (
     anchored,
     answered,
     duplicated,
+    misfiled,
+    performable,
     pruned,
     sources,
     ungrounded,
@@ -464,3 +466,83 @@ def test_the_original_changes_are_not_mutated():
     original = Change(tool="cancel_reservation", record="the same reservation id")
     anchored([original], [])
     assert original.record == "the same reservation id"
+
+
+# --- a change has to name a call somebody can make -------------------------
+
+
+WRITES = frozenset({"cancel_reservation", "update_reservation_flights", "book_reservation"})
+
+
+def test_a_planned_write_survives():
+    changes = [Change(tool="cancel_reservation", record="ABC123", what="cancel it")]
+
+    assert performable(changes, WRITES) == changes
+
+
+def test_a_lookup_filed_as_a_change_is_dropped():
+    """Run 017 filed 23 of these -- get_reservation_details, search_direct_flight,
+    calculate, transfer_to_human_agents. A read is never discharged by an approved
+    write, so the ledger keeps it owed and the speaker holds the reply forever."""
+    changes = [
+        Change(tool="get_reservation_details", record="ABC123", what="read it"),
+        Change(tool="cancel_reservation", record="ABC123", what="cancel it"),
+    ]
+
+    kept = performable(changes, WRITES)
+
+    assert [c.tool for c in kept] == ["cancel_reservation"]
+
+
+def test_a_tool_that_does_not_exist_is_dropped():
+    """`update_reservation_cabin`, six times in run 017. The policy has a "Change
+    cabin" heading and the model reasons from it to a call to match; cabin is an
+    argument to update_reservation_flights."""
+    changes = [Change(tool="update_reservation_cabin", record="ABC123", what="to business")]
+
+    assert performable(changes, WRITES) == []
+
+
+def test_nothing_is_repaired_into_a_write_nobody_asked_for():
+    """Dropping, not guessing. `update_reservation_cabin` could mean a cabin change
+    or a flight change, and inventing the difference here would file a write the
+    customer never requested."""
+    changes = [Change(tool="update_reservation_cabin", record="ABC123", what="to business")]
+
+    assert all(c.tool != "update_reservation_flights" for c in performable(changes, WRITES))
+
+
+def test_an_empty_write_set_admits_nothing():
+    """This function knows only what it is given: with no writes named, no change
+    names one. The kernel is what decides not to ask -- it skips the filter when
+    the graph was built without the tools it routes on, so a kernel with no
+    catalogue behaves exactly as it did before this existed."""
+    changes = [Change(tool="cancel_reservation", record=None, what="x")]
+
+    assert performable(changes, frozenset()) == []
+
+
+KNOWN = WRITES | frozenset({"get_reservation_details", "search_direct_flight"})
+
+
+def test_a_read_filed_as_a_change_becomes_a_lookup():
+    """Dropping it would lose the one thing the entry got right -- that the actor
+    has to make this call. `lookups` is the field that carries that, and it is
+    rendered to the actor as "Find out first"."""
+    changes = [Change(tool="get_reservation_details", record="ABC123", what="read it")]
+
+    assert misfiled(changes, WRITES, KNOWN) == ["get_reservation_details: read it"]
+
+
+def test_a_tool_that_does_not_exist_is_not_rescued_into_a_lookup():
+    """`update_reservation_cabin` is not a misplaced read. Sending the actor to
+    find out with a call nobody can make is worse than saying nothing."""
+    changes = [Change(tool="update_reservation_cabin", record="ABC123", what="to business")]
+
+    assert misfiled(changes, WRITES, KNOWN) == []
+
+
+def test_a_write_is_never_rescued_into_a_lookup():
+    changes = [Change(tool="cancel_reservation", record="ABC123", what="cancel it")]
+
+    assert misfiled(changes, WRITES, KNOWN) == []

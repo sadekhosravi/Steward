@@ -19,26 +19,40 @@ file is named after. Avg reward is `scripts/score.py`, which counts an unscored
 simulation as 0; `Scored` is how often that happened, and a row that lost many is
 not comparable to one that lost none.
 
-| Run | Change | Trials | Avg reward | Pass^1 | Pass^2 | Pass^3 | Pass^4 | Scored |
-|---|---|---|---|---|---|---|---|---|
-| 001 | baseline: bare ReAct, no gates | 4 | 0.365 ±0.023 | 0.360 | 0.260 | 0.200 | **0.160 ±0.029** | 196/200 |
-| 002 | + PRE-GATE, GATE, COMMIT | 4 | 0.420 ±0.021 | 0.340 | 0.280 | 0.260 | **0.220 ±0.031** | 197/200 |
-| diag | rename to Steward, temperature 0.0, Langfuse | 1 | 0.380 | 0.380 | — | — | — | 50/50 |
-| 003 | + enforced tool schemas, first real system prompt | 1 | 0.420 | 0.420 | — | — | — | 49/50 |
-| 004b | **control: tau2's own `llm_agent`, no scaffold** | 1 | **0.500** | 0.500 | — | — | — | 47/50 |
-| 005 | + planner agent, policy sections routed per turn | 3 | 0.333 ±0.031 | 0.360 | 0.220 | 0.120 | — | 130/150 |
-| speaker_49 | + airport codes the policy assumes (see note) | 2 | 0.270 ±0.041 | 0.420 | 0.100 | — | — | 63/100 |
-| fixes_50 | + SPEAKER, the check on the reply | 1 | 0.280 | 0.280 | — | — | — | 38/50 |
-| parts_50 | + workflows, planner in the loop, deterministic checks | 1 | 0.420 | 0.420 | — | — | — | 47/50 |
-| all_parts_50 | + Parts 1–6, harmony repair | 1 | **0.460** | 0.460 | — | — | — | **50/50** |
-| arm C `stable_ef6cffd_50x3` | **stable `ef6cffd`: monolithic critic on, no sieve** | 3 | **0.493 ±0.030** | 0.500 | 0.360 | 0.300 | — | 150/150 |
-| arm B `ab_control_50x3` | **control: tau2's own `llm_agent`, no scaffold** | 3 | 0.433 ±0.026 | 0.460 | 0.320 | 0.300 | — | 149/150 |
-| `veto_consent_50x3` | + verifiers as veto over the critic, consent ledger | 3 | 0.507 ±0.021 | 0.480 | 0.460 | 0.400 | — | 150/150 |
-| arm A `ab_steward_50x3` | Part 4 sieve `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
-| cell 1 `gateoff_ef6cffd_50x3` | `ef6cffd` + `STEWARD_GATE=off`: nothing gating | 3 | 0.420 ±0.031 | 0.420 | 0.273 | 0.220 | — | 147/150 |
-| cell 2 `sievegate_73ad27f_50x3` | `73ad27f` + `STEWARD_GATE=on`: **sieve and critic together** | 3 | **0.500 ±0.027** | 0.500 | 0.393 | 0.340 | — | 150/150 |
-| `final50x3` | `bdf1f3e`: sieve and critic, consent ledger, records seam fixed | 3 | 0.540 ±0.023 | 0.540 | 0.460 | 0.420 | — | 150/150 |
-| `steps1234_50x3` | `ea1e6ac`: gate given the request, the consent, and the provenance | 3 | **0.560 ±0.023** | 0.560 | 0.460 | 0.400 | — | 150/150 |
+| Run | Name on disk | About | Trials | Avg reward | Pass^1 | Pass^2 | Pass^3 | Pass^4 | Scored |
+|---|---|---|---|---|---|---|---|---|---|
+| 001 | — | baseline: bare ReAct, no gates | 4 | 0.365 ±0.023 | 0.360 | 0.260 | 0.200 | **0.160 ±0.029** | 196/200 |
+| 002 | — | + PRE-GATE, GATE, COMMIT | 4 | 0.420 ±0.021 | 0.340 | 0.280 | 0.260 | **0.220 ±0.031** | 197/200 |
+| diag | — | rename to Steward, temperature 0.0, Langfuse | 1 | 0.380 | 0.380 | — | — | — | 50/50 |
+| 003 | — | + enforced tool schemas, first real system prompt | 1 | 0.420 | 0.420 | — | — | — | 49/50 |
+| 004b | — | **control: tau2's own `llm_agent`, no scaffold** | 1 | **0.500** | 0.500 | — | — | — | 47/50 |
+| 005 | — | + planner agent, policy sections routed per turn | 3 | 0.333 ±0.031 | 0.360 | 0.220 | 0.120 | — | 130/150 |
+| 006 | `speaker_49` | + airport codes the policy assumes (see note) | 2 | 0.270 ±0.041 | 0.420 | 0.100 | — | — | 63/100 |
+| 007 | `fixes_50` | + SPEAKER, the check on the reply | 1 | 0.280 | 0.280 | — | — | — | 38/50 |
+| 008 | `parts_50` | + workflows, planner in the loop, deterministic checks | 1 | 0.420 | 0.420 | — | — | — | 47/50 |
+| 009 | `all_parts_50` | + Parts 1–6, harmony repair | 1 | **0.460** | 0.460 | — | — | — | **50/50** |
+| 010 | `stable_ef6cffd_50x3` | *arm C.* `ef6cffd`: monolithic critic on, no sieve | 3 | **0.493 ±0.030** | 0.500 | 0.360 | 0.300 | — | 150/150 |
+| 011 | `ab_control_50x3` | *arm B.* **control: tau2's own `llm_agent`, no scaffold** | 3 | 0.433 ±0.026 | 0.460 | 0.320 | 0.300 | — | 149/150 |
+| 012 | `veto_consent_50x3` | + verifiers as veto over the critic, consent ledger | 3 | 0.507 ±0.021 | 0.480 | 0.460 | 0.400 | — | 150/150 |
+| 013 | `ab_steward_50x3` | *arm A.* `73ad27f`: deterministic panel on, monolith off | 3 | 0.487 ±0.023 | 0.500 | 0.380 | 0.380 | — | 150/150 |
+| 014 | `gateoff_ef6cffd_50x3` | *cell 1.* `ef6cffd` + `STEWARD_GATE=off`: nothing gating | 3 | 0.420 ±0.031 | 0.420 | 0.273 | 0.220 | — | 147/150 |
+| 015 | `sievegate_73ad27f_50x3` | *cell 2.* `73ad27f` + `STEWARD_GATE=on`: **sieve and critic together** | 3 | **0.500 ±0.027** | 0.500 | 0.393 | 0.340 | — | 150/150 |
+| 016 | `final50x3` | `bdf1f3e`: sieve and critic, consent ledger, records seam fixed | 3 | 0.540 ±0.023 | 0.540 | 0.460 | 0.420 | — | 150/150 |
+| **017** | `steps1234_50x3` | `ea1e6ac`: gate given the request, the consent, the provenance. **Best run in the project.** | 3 | **0.560 ±0.023** | 0.560 | 0.460 | 0.400 | — | 150/150 |
+| 018 | `planner17` | planner: REPLACE + scope + record, 17 targeted tasks. **Aborted at 20/51 — regression.** | 3 | 0.150 (partial) | — | — | — | — | 20/51 |
+| 019 | `run019` | planner: REPLACE + quote rule + `performable`. Surplus writes 26 → 7; plan recall 72.9% → 63.3% | 1 | 0.620 | 0.620 | — | — | — | 50/50 |
+
+## How runs are named
+
+`Run` is the number to use in conversation. `Name on disk` is the directory under
+`vendor/tau2-data/data/simulations/`, and the journal of the same name under
+`scratchpad/keep/`. Runs 001–005 predate the convention and keep the labels the
+analysis below already refers to; everything from 006 is numbered in order.
+
+**Run 017 is the current baseline** — the highest score the project has recorded,
+and the one to compare against unless a row says otherwise. Its journal
+(`keep/steps1234.jsonl`, 150 simulations, every planner/gate/actor node) is the
+corpus for offline work.
 
 The last two rows' Pass^k are computed with tau2's own formula,
 `comb(successes, k) / comb(trials, k)` averaged over tasks
@@ -819,3 +833,41 @@ have agreed, which makes the corpus worth more than this run's headline does.
 database, and on the previous run only 23 of those were writes the gate refused
 -- the rest were never proposed by anyone. That is planner and actor territory,
 and there is no offline corpus for it yet.
+
+## Run 019 — the deterministic seam works, the prompt rule does not
+
+50 tasks, 1 trial, seed 626729, paired against run 017's trial 0 (which happens to
+sit exactly on run 017's own average, 0.560, so it is a fair stand-in).
+
+| | reward | DB | COMM | gold read | gold write |
+|---|---|---|---|---|---|
+| 017 t0 | 0.560 | 0.560 | 0.900 | 86.0% | 42.9% |
+| 019 | 0.620 | 0.640 | 0.920 | **69.9%** | 40.8% |
+
+Paired **+0.060 ± 0.103** (1.1 SE), 5 better / 2 worse / 43 unchanged. Unproven.
+
+At the plan level, against criteria fixed before the run:
+
+| | gold writes planned | unwanted | zero-write | reads/fake | surplus executed |
+|---|---|---|---|---|---|
+| 017 t0 | 72.9% | 101 (73%) | 37 | 8 | 26 |
+| 019 | **63.3%** | 97 (**76%**) | 41 | **0** | **7** |
+
+- **`performable`/`misfiled` did exactly what was specified.** Entries naming a read
+  or a tool that does not exist: 8 → 0. This was the one row with a predicted value
+  rather than a hoped-for one, and it is why the run was worth its cost.
+- **Surplus writes reaching the database fell 26 → 7.** That, not recall, is where
+  the reward gain comes from -- gold-write recall was flat.
+- **The quote rule failed**, the same way run 018's scope instruction failed:
+  unwanted changes 73% → 76%, the zero-write pool 37 → 41, and plan recall down
+  9.6 points. Two measured attempts at telling this planner what *not* to plan,
+  both negative. A third phrasing is not worth a run.
+- **Gold read fell 86.0% → 69.9%** and is unexplained. Reads are free and do not
+  enter reward, but they are how the actor grounds its arguments, and wrong
+  arguments were run 017's largest failure class.
+
+Method note: reward figures reported mid-run during this run were wrong twice --
+at 37 of 50 tasks gold-write recall read 33.3% → 48.7% and finished flat, and the
+absolute rewards were depressed because tau2 runs tasks roughly in order and the
+unrun tail (38, 43, 45-49) averages 0.952. Partial slices of this benchmark are
+biased, not merely noisy. Do not report them.

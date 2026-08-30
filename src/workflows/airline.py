@@ -30,6 +30,7 @@ __all__ = [
     "CHANGE_FLIGHTS",
     "CHANGE_PASSENGERS",
     "COMPENSATE",
+    "REPLACE",
     "STANDING",
 ]
 
@@ -374,6 +375,20 @@ CHANGE_CABIN = Workflow(
         *_IDENTIFY,
         Rule(
             statement=(
+                "A cabin change is made with update_reservation_flights, passing the new "
+                "cabin and the flights the reservation already has. There is no separate "
+                "cabin tool. This domain has six tools that write, and that is one of "
+                "them."
+            ),
+            quote=(
+                "Before taking any actions that update the booking database (booking, "
+                "modifying flights, editing baggage, changing cabin class, or updating "
+                "passenger information), you must list the action details and obtain "
+                "explicit user confirmation (yes) to proceed."
+            ),
+        ),
+        Rule(
+            statement=(
                 "The new cabin applies to every segment. A cabin change for one leg is "
                 "not something the tool can express."
             ),
@@ -474,6 +489,138 @@ CHANGE_PASSENGERS = Workflow(
         ),
     ),
     rules=_IDENTIFY,
+)
+
+
+# --- replace, which is not a procedure the policy names --------------------
+
+# The one workflow here with no heading of its own in the policy. It exists
+# because five separate rules end in the same place -- the change the customer
+# wants cannot be made to the reservation they have -- and the policy never says
+# what to do next. Three tasks in the last 50x3 lost on exactly that: the
+# customer asked for different flights on a basic economy reservation, we called
+# `update_reservation_flights`, and the tool took it, because "The API does not
+# check these for the agent". Gold cancelled and booked again.
+#
+# It is filed under Modify because that is the section the customer's request
+# lands in. Every quote below is from Modify or Cancel; nothing here is invented.
+REPLACE = Workflow(
+    name="Replace a reservation: cancel it and book it again",
+    section=_MODIFY,
+    facts=(
+        _USER_ID,
+        _RESERVATION_ID,
+        _RESERVATION,
+        Fact(
+            name="the reason for cancelling, and whether the reservation qualifies "
+            "to be cancelled at all",
+            source=f"{CUSTOMER}, against the reservation",
+        ),
+        Fact(
+            name="the replacement flights and their price in the cabin actually wanted",
+            source="search_direct_flight or search_onestop_flight",
+        ),
+        Fact(
+            name="what the new booking will cost and what the old one refunds",
+            source="the two prices, subtracted",
+        ),
+    ),
+    # Each of these is a change that cannot be made to the record the customer
+    # already holds. Naming the route out is the whole point: read on its own,
+    # every one of them reads as a refusal, and that is how they were being read.
+    blocks=(
+        Rule(
+            statement=(
+                "Never move the flights on a basic economy reservation by updating "
+                "it. Cancel it and book the new itinerary. Changing the cabin in the "
+                "same call does not make it lawful -- a cabin change is allowed only "
+                "when the flights stay exactly as they are."
+            ),
+            quote="Basic economy flights cannot be modified.",
+        ),
+        Rule(
+            statement=(
+                "Never move the flights and change the cabin on the same reservation "
+                "in one update_reservation_flights call. That one tool does both, and "
+                "will accept doing them together, but the policy allows a cabin change "
+                "only while the flights stay exactly as they are. Cancel and book the "
+                "itinerary wanted, in the cabin wanted."
+            ),
+            quote=(
+                "In other cases, all reservations, including basic economy, can change "
+                "cabin without changing the flights."
+            ),
+        ),
+        Rule(
+            statement=(
+                "Never update a reservation to a different origin, destination or "
+                "trip type. Flying somewhere else is a new booking: cancel this one "
+                "and book that."
+            ),
+            quote=(
+                "Other reservations can be modified without changing the origin, "
+                "destination, and trip type."
+            ),
+        ),
+        Rule(
+            statement=(
+                "Never update a reservation to more or fewer travellers, and never "
+                "split one into several by updating it. The count on an existing "
+                "record cannot move -- cancel it and book what is wanted."
+            ),
+            quote="The user can modify passengers but cannot modify the number of passengers.",
+        ),
+        Rule(
+            statement=(
+                "Never add insurance to a reservation booked without it. Cancel it "
+                "and book again with insurance, if that is what the customer wants."
+            ),
+            quote="The user cannot add insurance after initial booking.",
+        ),
+    ),
+    rules=(
+        *_IDENTIFY,
+        Rule(
+            statement=(
+                "The cancellation has to stand on its own grounds. Needing to re-book "
+                "is not one of them: if the reservation does not meet one of the four "
+                "conditions for cancelling, this route is closed and the customer is "
+                "told so."
+            ),
+            quote="Otherwise, flight can be cancelled if any of the following is true:",
+        ),
+        Rule(
+            statement=(
+                "Two writes, in order: cancel_reservation first, then book_reservation. "
+                "Plan both. One without the other leaves the customer with nothing, or "
+                "with two reservations."
+            ),
+            quote="The API does not check these for the agent, so the agent must make "
+            "sure the rules apply before calling the API!",
+        ),
+        Rule(
+            statement=(
+                "The new booking is a booking, not a copy. Cabin, baggage, insurance "
+                "and payment are all chosen again from scratch, and the free baggage "
+                "allowance is recomputed for the cabin actually booked."
+            ),
+            quote="Do not add checked bags that the user does not need.",
+        ),
+        Rule(
+            statement=(
+                "Say the whole of it before either write: that the change cannot be "
+                "made to the existing reservation, what the old one refunds, what the "
+                "new one costs, and the difference. It is one decision for the "
+                "customer, not two."
+            ),
+            quote=(
+                "Before taking any actions that update the booking database (booking, "
+                "modifying flights, editing baggage, changing cabin class, or updating "
+                "passenger information), you must list the action details and obtain "
+                "explicit user confirmation (yes) to proceed."
+            ),
+        ),
+    ),
 )
 
 
@@ -656,6 +803,7 @@ AIRLINE = (
     CHANGE_CABIN,
     CHANGE_BAGGAGE,
     CHANGE_PASSENGERS,
+    REPLACE,
     CANCEL,
     COMPENSATE,
 )
