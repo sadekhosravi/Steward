@@ -258,8 +258,7 @@ again the moment they come back.
 **And one verdict per record.** Where several records are in scope, each one
 qualifies or does not on its own facts, and a condition that fails on one says
 nothing about the next. Plan an entry for the records that qualify and say in
-`what` the condition that lets each through. A record you have not read yet is a
-line in `lookups`, not an entry. The last run read seven reservations, settled all
+`what` the condition that lets each through. The last run read seven reservations, settled all
 seven in one sentence as already flown, and never cancelled the three that had not
 flown.
 
@@ -465,6 +464,19 @@ STANDING = (
     "Drop part of it only where they have said they no longer want it."
 )
 ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
+# The planner has no memory between calls, so without this it cannot tell a first
+# attempt at a question from a fourth. Run 020 measured what that costs: goals
+# opening with "determine" ran at 0.295 per plan and 42% of plans named no change
+# at all, and task 44 wrote six consecutive plans meaning the same thing --
+# collect, calculate, determine -- while every fact it had asked for was already
+# in hand.
+BEFORE = (
+    "WHAT YOU PLANNED LAST TIME, AND WHAT YOU ASKED TO FIND OUT\n"
+    "You have already planned this conversation once. Where what you asked for "
+    "has come back, this plan does not ask for it again: it says what to do with "
+    "the answer. Writing a goal you have already written is this plan standing "
+    "still."
+)
 DONE = "CHANGES ALREADY MADE IN THIS CONVERSATION"
 OWED = (
     "CHANGES THIS CONVERSATION HAS ALREADY COMMITTED TO AND NOT YET MADE\n"
@@ -531,6 +543,7 @@ def brief(
     done: list[Written] | None = None,
     owed: list[Change] | None = None,
     standing: str = "",
+    before: str = "",
 ) -> str:
     """The case put to the planner: what has happened, and what was just asked.
 
@@ -556,6 +569,8 @@ def brief(
     )
     if standing:
         case = f"{case}\n\n{STANDING}\n{standing}"
+    if before:
+        case = f"{case}\n\n{BEFORE}\n{before}"
     if arrived:
         results = "\n".join(f"- {' '.join(str(text).split())}" for text in arrived.values())
         case = f"{case}\n\n{ARRIVED}\n{results}"
@@ -565,6 +580,18 @@ def brief(
     if owed:
         case = f"{case}\n\n{OWED}\n" + "\n".join(f"- {line}" for line in _lines(owed))
     return case
+
+
+def recap(plan: Plan) -> str:
+    """What this plan meant to do, for the next plan to read before repeating it.
+
+    The goal and the lookups only. `changes` reach the next call already, as the
+    changes still owed, and listing them here too would show one commitment twice.
+    """
+    lines = [f"Goal you set: {plan.goal}"] if plan.goal else []
+    if plan.lookups:
+        lines += ["You asked to find out:", *(f"- {line}" for line in plan.lookups)]
+    return "\n".join(lines)
 
 
 def render(plan: Plan) -> str:

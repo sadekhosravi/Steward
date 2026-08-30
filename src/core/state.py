@@ -440,6 +440,19 @@ class StewardState(BaseModel):
     replans: int = 0
     """Mid-turn plans written so far. Bounds the cost of asking again."""
 
+    before: str = ""
+    """The goal and the lookups of the plan written last, for the next one to read.
+
+    The planner is a fresh call every time, so it cannot otherwise tell a first
+    attempt at a question from a fourth, and run 020 measured what that costs: 42%
+    of plans named no change at all, goals opening with "determine" ran at 0.295
+    per plan, and one task wrote six consecutive plans meaning collect, calculate,
+    determine while every fact it had asked for was already in hand.
+
+    Held as rendered text rather than as the `Plan`, because the only consumer is
+    a prompt and a stored object would be a second copy of `changes` waiting to
+    disagree with the first."""
+
     request: str = ""
     """What the customer asked for, at the scope they asked for it.
 
