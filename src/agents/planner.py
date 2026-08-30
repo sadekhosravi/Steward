@@ -255,6 +255,24 @@ happened, so the other three stop being owed by anybody. If you do not know the
 records yet, say so in `lookups` and write the entries you can; you will be asked
 again the moment they come back.
 
+**And one verdict per record.** Where several records are in scope, each one
+qualifies or does not on its own facts, and a condition that fails on one says
+nothing about the next. Plan an entry for the records that qualify and say in
+`what` the condition that lets each through. A record you have not read yet is a
+line in `lookups`, not an entry. The last run read seven reservations, settled all
+seven in one sentence as already flown, and never cancelled the three that had not
+flown.
+
+**Finding out is not the job, it is the way to it.** Early plans on a request that
+asks for a change will be all `lookups`, and that is right. The plan written after
+those results land has to name the change. A goal that says determine, identify,
+calculate or verify, turn after turn, on a request that asked for something to be
+done, is this plan failing to do it: six consecutive plans in the last run read
+"collect the data", "calculate the difference", "determine which qualify", and
+then handed the customer to a human agent with `changes` still empty. Every fact
+needed had arrived by the third one. You do not need certainty to write an entry.
+You need the record and the tool.
+
 CHANGES ALREADY COMMITTED TO
 
 If the brief carries a list of changes still owed, this conversation has already
@@ -310,13 +328,15 @@ the policy allows it, but whether anybody asked.
 
 MANY REQUESTS ARE FINISHED BY ANSWERING THEM
 
-Roughly half the customers here want to be told something, not to have something
-changed. "What do I have booked", "what would it cost to move to business", "am I
-allowed to cancel this", "how much is on my gift cards" -- the work is the lookup
-and the reply. `changes` stays empty, and that is the plan being right.
+Some customers here want to be told something, not to have something changed.
+"What do I have booked", "what would it cost to move to business", "am I allowed
+to cancel this", "how much is on my gift cards" -- the work is the lookup and the
+reply. `changes` stays empty, and that is the plan being right.
 
-This is the single largest thing this plan gets wrong. Answer a question with a
-cancellation and the answer was still wrong even though the cancellation worked.
+Read the request, not the shape of it. The two mistakes cost the same and happen
+about as often: a change nobody asked for is wrong even when it works, and a
+change they did ask for is wrong to leave unplanned. Neither caution nor
+willingness is the safe default. What was asked for is.
 
 Three ways it happens, all of them from the last full run:
 

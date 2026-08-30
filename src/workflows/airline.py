@@ -330,6 +330,14 @@ CHANGE_FLIGHTS = Workflow(
                 "the rules apply before calling the API!"
             ),
         ),
+        Rule(
+            statement=(
+                "The move is made with update_reservation_flights, passing every segment "
+                "the reservation should end up with, not only the ones that change, and "
+                "the cabin it already has."
+            ),
+            quote="Change flights:",
+        ),
     ),
 )
 
@@ -456,6 +464,15 @@ CHANGE_BAGGAGE = Workflow(
             ),
             quote="- Each extra baggage is 50 dollars.",
         ),
+        Rule(
+            statement=(
+                "A baggage change is made with update_reservation_baggages, passing the "
+                "total number of checked bags the reservation should end up with and how "
+                "many of those are free. There is no add-a-bag tool and nothing has to be "
+                "cancelled: the call carries the new total, not the difference."
+            ),
+            quote="Change baggage and insurance:",
+        ),
     ),
 )
 
@@ -488,7 +505,20 @@ CHANGE_PASSENGERS = Workflow(
             quote="Even a human agent cannot modify the number of passengers.",
         ),
     ),
-    rules=_IDENTIFY,
+    rules=(
+        *_IDENTIFY,
+        Rule(
+            statement=(
+                "Correcting who the passengers are is made with "
+                "update_reservation_passengers, passing the whole list of passengers with "
+                "the corrections already applied. This is an ordinary change the domain "
+                "supports. A misspelled name, a wrong date of birth, or one traveller in "
+                "place of another are all done with it, and none of them needs the "
+                "reservation cancelled and booked again."
+            ),
+            quote="Change passengers:",
+        ),
+    ),
 )
 
 
@@ -566,7 +596,10 @@ REPLACE = Workflow(
             statement=(
                 "Never update a reservation to more or fewer travellers, and never "
                 "split one into several by updating it. The count on an existing "
-                "record cannot move -- cancel it and book what is wanted."
+                "record cannot move -- cancel it and book what is wanted. Only the "
+                "count. Changing who the travellers are, while the count stays the "
+                "same, is update_reservation_passengers and does not come here: one "
+                "name in place of another is a correction, not a replacement."
             ),
             quote="The user can modify passengers but cannot modify the number of passengers.",
         ),
@@ -712,6 +745,14 @@ CANCEL = Workflow(
             ),
             quote="The refund will go to original payment methods within 5 to 7 business days.",
         ),
+        Rule(
+            statement=(
+                "The cancellation itself is made with cancel_reservation, passing the "
+                "reservation id and nothing else. It cancels the whole reservation; there "
+                "is no way to cancel one leg of one."
+            ),
+            quote="The refund will go to original payment methods within 5 to 7 business days.",
+        ),
     ),
 )
 
@@ -772,6 +813,18 @@ COMPENSATE = Workflow(
                 "saying a flight was cancelled is not the flight having been cancelled."
             ),
             quote="Always confirms the facts before offering compensation.",
+        ),
+        Rule(
+            statement=(
+                "A certificate is issued with send_certificate, passing the user id and "
+                "the amount in dollars. It is the only tool that issues one, and it is "
+                "the write this workflow ends in."
+            ),
+            quote=(
+                "If the user complains about cancelled flights in a reservation, the agent "
+                "can offer a certificate as a gesture after confirming the facts, with the "
+                "amount being $100 times the number of passengers."
+            ),
         ),
         Rule(
             statement="A cancelled flight: a certificate for 100 dollars times the passengers.",

@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 from agents.gate import transcript
-from agents.planner import Plan, brief, build_planner, catalogue, render
+from agents.planner import INSTRUCTIONS, Plan, brief, build_planner, catalogue, render
 from core.kernel import REPLAN_LIMIT, Act, Kernel, Say
 from core.state import Change
 from tests.tools import CANCEL, LOOKUP
@@ -599,3 +599,32 @@ def test_a_second_request_is_added_to_the_first_not_swapped_for_it():
 
     assert "keep both" in case
     assert "no longer want it" in case
+
+
+def test_the_plan_is_told_that_finding_out_has_to_end_in_a_change():
+    """Run 019 task 44: six plans, all of them "collect", "calculate", "determine",
+    then a handoff with `changes` never once filled in -- against three gold
+    updates whose facts had all arrived by the third plan. 13 of the 24 gold writes
+    that run missed were never planned at all."""
+    seen = " ".join(INSTRUCTIONS.split())
+    assert "Finding out is not the job, it is the way to it." in seen
+    assert "You need the record and the tool." in seen
+
+
+def test_the_plan_is_told_to_judge_each_record_on_its_own():
+    """Run 019 task 39: seven reservations read, one sentence settled all seven as
+    already flown, and the three gold cancellations were never proposed."""
+    seen = " ".join(INSTRUCTIONS.split())
+    assert "And one verdict per record." in seen
+    assert "a condition that fails on one says nothing about the next" in seen
+
+
+def test_neither_caution_nor_willingness_is_offered_as_the_default():
+    """The section used to open "Roughly half the customers here want to be told
+    something" and call answering-with-a-write "the single largest thing this plan
+    gets wrong". Measured over run 019 it moved the empty-`changes` rate not at all
+    (37% before, 37% after), while under-writing accounted for 11 of the 18 DB
+    failures. The bias was real and pointed the wrong way."""
+    seen = " ".join(INSTRUCTIONS.split())
+    assert "Neither caution nor willingness is the safe default." in seen
+    assert "single largest thing this plan gets wrong" not in seen
