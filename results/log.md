@@ -42,6 +42,7 @@ not comparable to one that lost none.
 | 018 | `planner17` | planner: REPLACE + scope + record, 17 targeted tasks. **Aborted at 20/51 — regression.** | 3 | 0.150 (partial) | — | — | — | — | 20/51 |
 | 019 | `run019` | planner: REPLACE + quote rule + `performable`. Surplus writes 26 → 7; plan recall 72.9% → 63.3% | 1 | 0.620 | 0.620 | — | — | — | 50/50 |
 | 020 | `run020` | planner: every write workflow names its tool; commit-after-lookup; one verdict per record. **Regression, −0.050 paired.** | 2 | 0.530 ±0.050 | 0.530 | 0.360 | — | — | 100/100 |
+| 021 | `run021` | planner: brake removed, `recap`/`before` carries the last plan's goal forward. **No effect, stopped at 44.** | 2 | 0.432 (partial) | — | — | — | — | 44/100 |
 
 ## How runs are named
 
@@ -1030,3 +1031,41 @@ into one lost simulation, which is the better of the two: a wedged simulation is
 scored zero either way, and it takes a worker with it.
 
 Worth carrying into every future run, not just this one.
+
+### Run 021's verdict: no effect, and the reason to stop it at 44
+
+**Paired against run 020 over the 44 shared (task, trial) pairs: −0.023 ±0.051**,
+with 39 of 44 identical. Against run 017: −0.114 ±0.067. The pairing is what makes
+a partial slice usable here — a partial *mean* is biased, because tau2 runs tasks
+roughly in order and this domain's tail is much easier, but a paired difference on
+the same pairs is not.
+
+The leading indicators had already said it, before the reward did:
+
+| | 017 | 020 | 021 |
+|---|---|---|---|
+| plans with empty `changes` | 37.4% | 41.8% | **43.9%** |
+| goals that only find out, per plan | 0.231 | 0.339 | 0.298 |
+| changes per plan | 1.85 | 1.97 | **1.45** |
+
+Removing the brake recovered the find-out rate only part of the way, and empty
+plans went up again anyway. Showing the planner the goal it set last time did not
+make it commit. Stopped at 44 rather than spending two more hours narrowing a null
+from ±0.051 to ±0.035.
+
+### What three runs of prompt work actually add up to
+
+| run | planner system prompt | reward |
+|---|---|---|
+| **017** | **23,725 chars** | **0.560 ±0.023** |
+| 018 | ~32,000 | aborted, regression |
+| 020 | 34,070 | 0.530 ±0.050 |
+| 021 | 34,070 | −0.023 against 020 |
+
+The planner's prompt grew **44%** between the best run this project has recorded
+and the current one, and every change that added prose to it lost ground. Each
+addition was locally justified by a real defect read out of real plans — the
+`update_reservation_cabin` hallucination, task 44's determine-loop, task 39's
+blanket verdict — and the aggregate is still a model that finds out more and
+commits less. That is the hypothesis run 022 tests, and the only one that fits
+every row.
