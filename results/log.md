@@ -1013,3 +1013,20 @@ requests would have bought timeouts rather than throughput.
 Nothing about the slowdown was caused by the change: threads advanced normally
 throughout, with varied, sensible goals and no repetition, and the log carries
 zero timeout or rate-limit lines.
+
+### tau2 has no simulation timeout by default, and it costs a worker slot
+
+`--timeout` defaults to "No timeout by default" (`tau2/cli.py:146`). A simulation
+that wedges therefore holds one of the eight worker slots for the rest of the
+run. Run 020 stalled at 99/100 for thirteen minutes on exactly this; run 021 hit
+it harder, with task 6 wedged for **115 minutes** while the endpoint was
+degraded, so the pool was doing seven-eighths of the work it was asked for.
+
+Run 021 was restarted with `--timeout 1800` after 23 simulations were safely on
+disk, and `--auto-resume` skipped them. Thirty minutes is generous — run 020's
+slowest legitimate simulation finished in about 800s — so the cap only ever bites
+a simulation that was never going to complete. That converts an unbounded hang
+into one lost simulation, which is the better of the two: a wedged simulation is
+scored zero either way, and it takes a worker with it.
+
+Worth carrying into every future run, not just this one.
