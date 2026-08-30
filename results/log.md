@@ -973,3 +973,43 @@ Recall by tool, run 017 → run 020, which is the clearest statement of the trad
 A correction to this file's earlier note: the "4× more" figure taken mid-run
 compared run 020 against run 019's *partial* journal and did not survive the full
 one. The real movements are the table above.
+
+## Run 021 — in flight, on a degraded endpoint
+
+Two changes on top of run 020, which was a regression.
+
+**Taken back:** *"A record you have not read yet is a line in `lookups`, not an
+entry."* Run 020's own numbers convicted it — see that section.
+
+**Added, and structural rather than prose:** the planner is a fresh model call
+every time it runs, so it cannot tell a first attempt at a question from a
+fourth. That is why task 44 wrote six consecutive plans meaning *collect,
+calculate, determine* while every fact it had asked for was already in hand.
+`recap()` now records the last plan's goal and lookups on `StewardState.before`,
+and `brief()` shows them back under a heading saying what a repeated goal means.
+The changes are deliberately left out of the recap: they already reach the next
+plan as what is still owed, and saying them twice would show one commitment as
+two. Wired end to end and covered by a test that fails if the two halves come
+apart.
+
+**Kept from run 020:** every write workflow naming the tool it ends in. That half
+worked and the numbers are in the run 020 section.
+
+### A note on this run's wall clock
+
+NVIDIA Build degraded badly part-way through. Bare `"Say OK."` calls against
+`openai/gpt-oss-20b`, single request, no concurrency, timed at **14.7s, 46.5s,
+71.4s, 47.7s** — against roughly 1s while run 020 was executing. Run 020 finished
+100 simulations in about 65 minutes; run 021 took 80 minutes to finish 16.
+
+The run was left going rather than killed or moved: `--auto-resume` keys finished
+work on `(trial, task_id, seed)` so nothing already done is lost, and switching to
+the OpenRouter fallback would have changed the provider under a comparison whose
+baselines (017, 019, 020) are all on NVIDIA — a far larger confound than the
+effect being measured. Concurrency was left at 8 rather than raised, because a
+*single* uncontended call taking 71s is server-side saturation, and more parallel
+requests would have bought timeouts rather than throughput.
+
+Nothing about the slowdown was caused by the change: threads advanced normally
+throughout, with varied, sensible goals and no repetition, and the log carries
+zero timeout or rate-limit lines.
