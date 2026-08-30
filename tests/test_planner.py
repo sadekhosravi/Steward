@@ -121,33 +121,6 @@ def test_the_planner_is_told_something_else_does_the_refusing():
     assert "checked against this policy before it runs" in seen[0]
 
 
-def test_the_permission_asymmetry_is_fenced_off_from_scope():
-    """The push to plan a change even when the policy is doubtful is deliberate, and
-    it was being read as licence to plan changes nobody asked for. 44 of the 51
-    surplus writes in the last full run were written down in a plan first; the actor
-    freelanced once in 150 simulations."""
-    seen: list[str] = []
-    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
-
-    told = " ".join(seen[0].split())
-
-    assert "THAT IS ABOUT PERMISSION. IT IS NOT ABOUT SCOPE" in told
-    assert "If you cannot find the sentence, delete the entry" in told
-    assert "the policy permits almost every change nobody asked for" in told
-
-
-def test_the_planner_is_told_a_question_is_finished_by_answering_it():
-    """119 of the 308 unwanted changes in run 017 -- 39% -- were planned on tasks
-    that wanted no write at all. The largest single thing this plan gets wrong."""
-    seen: list[str] = []
-    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
-
-    told = " ".join(seen[0].split())
-
-    assert "MANY REQUESTS ARE FINISHED BY ANSWERING THEM" in told
-    assert "`changes` stays empty, and that is the plan being right" in told
-
-
 def test_a_change_has_to_quote_the_customer():
     """The operational half. Stating the rule in the instructions was measured inert
     in run 018; the field the model actually fills has to carry it too."""
@@ -607,35 +580,6 @@ def test_a_second_request_is_added_to_the_first_not_swapped_for_it():
 
     assert "keep both" in case
     assert "no longer want it" in case
-
-
-def test_the_plan_is_told_that_finding_out_has_to_end_in_a_change():
-    """Run 019 task 44: six plans, all of them "collect", "calculate", "determine",
-    then a handoff with `changes` never once filled in -- against three gold
-    updates whose facts had all arrived by the third plan. 13 of the 24 gold writes
-    that run missed were never planned at all."""
-    seen = " ".join(INSTRUCTIONS.split())
-    assert "Finding out is not the job, it is the way to it." in seen
-    assert "You need the record and the tool." in seen
-
-
-def test_the_plan_is_told_to_judge_each_record_on_its_own():
-    """Run 019 task 39: seven reservations read, one sentence settled all seven as
-    already flown, and the three gold cancellations were never proposed."""
-    seen = " ".join(INSTRUCTIONS.split())
-    assert "And one verdict per record." in seen
-    assert "a condition that fails on one says nothing about the next" in seen
-
-
-def test_neither_caution_nor_willingness_is_offered_as_the_default():
-    """The section used to open "Roughly half the customers here want to be told
-    something" and call answering-with-a-write "the single largest thing this plan
-    gets wrong". Measured over run 019 it moved the empty-`changes` rate not at all
-    (37% before, 37% after), while under-writing accounted for 11 of the 18 DB
-    failures. The bias was real and pointed the wrong way."""
-    seen = " ".join(INSTRUCTIONS.split())
-    assert "Neither caution nor willingness is the safe default." in seen
-    assert "single largest thing this plan gets wrong" not in seen
 
 
 def test_the_next_plan_is_shown_the_goal_the_last_one_set():

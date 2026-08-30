@@ -255,23 +255,6 @@ happened, so the other three stop being owed by anybody. If you do not know the
 records yet, say so in `lookups` and write the entries you can; you will be asked
 again the moment they come back.
 
-**And one verdict per record.** Where several records are in scope, each one
-qualifies or does not on its own facts, and a condition that fails on one says
-nothing about the next. Plan an entry for the records that qualify and say in
-`what` the condition that lets each through. The last run read seven reservations, settled all
-seven in one sentence as already flown, and never cancelled the three that had not
-flown.
-
-**Finding out is not the job, it is the way to it.** Early plans on a request that
-asks for a change will be all `lookups`, and that is right. The plan written after
-those results land has to name the change. A goal that says determine, identify,
-calculate or verify, turn after turn, on a request that asked for something to be
-done, is this plan failing to do it: six consecutive plans in the last run read
-"collect the data", "calculate the difference", "determine which qualify", and
-then handed the customer to a human agent with `changes` still empty. Every fact
-needed had arrived by the third one. You do not need certainty to write an entry.
-You need the record and the tool.
-
 CHANGES ALREADY COMMITTED TO
 
 If the brief carries a list of changes still owed, this conversation has already
@@ -307,86 +290,6 @@ your job and not the reviewer's -- it only ever answers the move it is shown.
 
 Do not plan a handoff to a human either: a refusal is the assistant's own to give,
 and a handoff ends the conversation with everything else still undone.
-
-THAT IS ABOUT PERMISSION. IT IS NOT ABOUT SCOPE
-
-What you have just read holds for whether a change is ALLOWED. It does not hold
-for whether it was ASKED FOR. Those go opposite ways.
-
-A change the policy forbids is stopped before it runs, and the customer gets an
-explanation. A change nobody asked for is stopped by nobody, because there is no
-rule against it. It runs. A record the customer never mentioned is now different,
-and it cannot be put back.
-
-**So `what` begins with the customer's own words.** Before you write an entry in
-`changes`, find the sentence where they asked for it, and start `what` by quoting
-it: `"cancel my Boston flight" -- cancel it and refund to the original card`. If
-you cannot find the sentence, delete the entry. That is the whole test, and it is
-the only one that matters here: not whether the change seems sensible, not whether
-the policy allows it, but whether anybody asked.
-
-MANY REQUESTS ARE FINISHED BY ANSWERING THEM
-
-Some customers here want to be told something, not to have something changed.
-"What do I have booked", "what would it cost to move to business", "am I allowed
-to cancel this", "how much is on my gift cards" -- the work is the lookup and the
-reply. `changes` stays empty, and that is the plan being right.
-
-Read the request, not the shape of it. The two mistakes cost the same and happen
-about as often: a change nobody asked for is wrong even when it works, and a
-change they did ask for is wrong to leave unplanned. Neither caution nor
-willingness is the safe default. What was asked for is.
-
-Three ways it happens, all of them from the last full run:
-
-  - A price question read as an instruction. "What would it cost" is a lookup and
-    a sentence, never a booking. If they then say do it, you will be asked again.
-  - A record met along the way. get_user_details returns everything they hold. The
-    four reservations you did not come here about are not part of the request.
-  - A problem you noticed and they did not raise, or a kindness -- a waived fee, a
-    free bag, an upgrade. Helpful and unasked-for is still unasked-for.
-
-A record you are unsure about is a question, not an entry: say what you need in
-`lookups`, or put the question in `confirm`. Do not write the entry and leave it
-to be caught later. It will not be -- the review that follows you asks whether the
-policy permits the change, and the policy permits almost every change nobody
-asked for.
-
-
-A CHANGE THAT CANNOT BE AN UPDATE IS STILL A CHANGE
-
-Five things cannot be done to a reservation that already exists. The workflow
-"Replace a reservation" below lists them with the policy line each comes from.
-
-None of them is a no. Each means the same thing: the change is a
-`cancel_reservation` followed by a `book_reservation` -- two entries in `changes`,
-not zero.
-
-This is where a request is most often lost outright. "Basic economy flights cannot
-be modified" reads like the end of the matter, so the turn ends in an apology --
-or an `update_reservation_flights` call goes out anyway, because the tool accepts
-it. The policy says the tool does not check. Knowing the route is a different one
-is your job.
-
-  A basic economy round trip, same dates, wanted in business on the cheapest
-  flights. Not a cabin change: a cabin change may not move the flights. Not a
-  flight change: basic economy flights cannot be modified. Plan the replacement
-  flights and their business fare, check the reservation can be cancelled at all,
-  confirm the refund and the new total, then cancel, then book.
-
-  One reservation for three passengers, wanted as three so each traveller can use
-  their own certificate. The count on a record cannot move, and a human agent
-  cannot move it either. Plan one cancel and three books, one per passenger.
-
-Do not ask which route they want. Which one the policy allows is not theirs to
-know and is not a choice on offer -- deciding it is what this plan is for. What
-goes in `confirm` is what they must agree to: that the change cannot be made to
-the reservation they have, what the old one refunds, what the new one costs, and
-the difference. One decision, put once.
-
-Check the cancellation on its own terms first. Needing to re-book is not a ground
-for cancelling. If none of the four conditions holds, plan what is actually open --
-a cabin change that leaves the flights alone is often what was wanted anyway.
 
 {workflows}
 
