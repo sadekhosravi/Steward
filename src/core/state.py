@@ -193,11 +193,14 @@ class Change(BaseModel):
     what: str = Field(
         default="",
         description=(
-            "What this call has to change about that record, in a few words. The "
-            "assistant reads it as its instruction, so write it as one. Do not put "
-            "the identifier here -- it belongs in `record`, and an identifier "
-            "written only here leaves this change indistinguishable from every "
-            "other change to the same tool."
+            "What this call has to change about that record, in a few words. Begin "
+            "with the customer's own words asking for it, in quotes, then the "
+            'instruction: \'"cancel my Boston flight" -- cancel it and refund to the '
+            "original card'. If you cannot quote them, they did not ask, and the "
+            "entry does not belong here. The assistant reads the rest as its "
+            "instruction, so write it as one. Do not put the identifier here -- it "
+            "belongs in `record`, and an identifier written only here leaves this "
+            "change indistinguishable from every other change to the same tool."
         ),
     )
 
