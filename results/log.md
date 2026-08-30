@@ -41,6 +41,7 @@ not comparable to one that lost none.
 | **017** | `steps1234_50x3` | `ea1e6ac`: gate given the request, the consent, the provenance. **Best run in the project.** | 3 | **0.560 ±0.023** | 0.560 | 0.460 | 0.400 | — | 150/150 |
 | 018 | `planner17` | planner: REPLACE + scope + record, 17 targeted tasks. **Aborted at 20/51 — regression.** | 3 | 0.150 (partial) | — | — | — | — | 20/51 |
 | 019 | `run019` | planner: REPLACE + quote rule + `performable`. Surplus writes 26 → 7; plan recall 72.9% → 63.3% | 1 | 0.620 | 0.620 | — | — | — | 50/50 |
+| 020 | `run020` | planner: every write workflow names its tool; commit-after-lookup; one verdict per record | 2 | *pending* | — | — | — | — | — |
 
 ## How runs are named
 
@@ -871,3 +872,65 @@ at 37 of 50 tasks gold-write recall read 33.3% → 48.7% and finished flat, and 
 absolute rewards were depressed because tau2 runs tasks roughly in order and the
 unrun tail (38, 43, 45-49) averages 0.952. Partial slices of this benchmark are
 biased, not merely noisy. Do not report them.
+
+## Run 020 — the writes the workflows never named
+
+The plans were read this time, not the aggregates, and the aggregates had been
+pointing at the wrong thing. Three findings, in order of how much they cost.
+
+**The gate refused zero gold writes.** Of the 24 gold writes run 019 missed, 13
+were never planned and 11 were planned and never proposed by the actor. The
+critic, which three runs of work went into, is not where writes are being lost.
+
+**Three of the six writes this domain can make were named in no workflow at
+all**: `update_reservation_passengers`, `update_reservation_baggages`,
+`send_certificate`. On task 22 the actor told the customer *"the system can't
+remove a passenger from an existing booking"* and offered to cancel and re-book
+instead — against three gold writes, one of which was that exact call. The
+workflows named every block and only one of the routes through them, and the
+model generalised the blocks. Every write workflow now names its tool and says
+what it can still do; `test_every_write_the_domain_can_make_is_named_by_the_
+workflow_that_makes_it` fails if that stops being true.
+
+**Under-writing is the failure mode, by 11 DB failures to 4.** Of run 019's 18
+DB failures: 11 missed gold writes and wrote nothing wrong, 3 called the right
+tool with wrong arguments, 2 did both, 2 wrote only surplus. The planner section
+headed *"MANY REQUESTS ARE FINISHED BY ANSWERING THEM"* opened by calling a write
+nobody asked for *"the single largest thing this plan gets wrong"* — and measured
+against run 019 it changed the empty-`changes` rate not at all (37% before, 37%
+after). It has been rebalanced to name both mistakes at their real weights.
+
+Two plan-reading findings got a paragraph each in the planner instructions. Task
+44: six consecutive plans reading "collect the data", "calculate the difference",
+"determine which qualify", then a handoff, with `changes` never once filled in —
+every fact needed had arrived by the third plan. Task 39: seven reservations
+read, one sentence settling all seven as *already flown*, three gold
+cancellations never proposed.
+
+### What the ledger turned out not to be
+
+Run 019's final-plan ledger holds 1.86 entries per simulation and 66% of them
+name a record that is not gold, which the earlier analysis read as the planner
+proposing three unwanted changes for every wanted one. Reading the plans, most of
+that is *search*: the planner names a change on each candidate record while it is
+still working out which record the customer means, and `_widen` cannot retract
+(`kernel.py`, deliberately — "a re-plan may add and may not take away"). The
+entries are also largely inert: **7 of 61 ever reached the gate.** The metric was
+measuring an artefact of how the ledger accumulates, and the "should not do"
+instruction written against it in run 019 was aimed at a target that was partly
+manufactured. Left alone this round.
+
+### The theme the next round is aimed at
+
+Of the 15 run-019 DB failures with a write discrepancy, 6 involve reading three
+or more reservations — and in **all six the agent had already read every gold
+record before it went wrong.** Twelve of the fifteen had. The failure is almost
+never that the record could not be found; it is that the request was matched to
+the wrong one out of a set already in hand. Tasks 17, 21, 22, 39, 42 and 44 are
+all this shape.
+
+| Run | Reward | DB | COMM | Gold write | Gold read | Notes |
+|---|---|---|---|---|---|---|
+| 017 (baseline, 50×3) | 0.560 ±0.023 | — | — | 42.9% | 86.0% | best in project |
+| 019 (50×1) | 0.620 | 0.640 | 0.920 | 40.8% | 69.9% | surplus writes 26 → 7 |
+| 020 (50×2) | *pending* | | | | | this section's changes |
