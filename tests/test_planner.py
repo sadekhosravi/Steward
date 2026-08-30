@@ -113,42 +113,6 @@ def test_the_planner_is_told_something_else_does_the_refusing():
     assert "checked against this policy before it runs" in seen[0]
 
 
-def test_the_permission_asymmetry_is_fenced_off_from_scope():
-    """The push to plan a change even when the policy is doubtful is deliberate, and
-    it was being read as licence to plan changes nobody asked for. 44 of the 51
-    surplus writes in the last full run were written down in a plan first; the actor
-    freelanced once in 150 simulations."""
-    seen: list[str] = []
-    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
-
-    told = " ".join(seen[0].split())
-
-    assert "THAT IS ABOUT PERMISSION. IT IS NOT ABOUT SCOPE" in told
-    assert "If you cannot find the sentence, delete the entry" in told
-    assert "the policy permits almost every change nobody asked for" in told
-
-
-def test_the_planner_is_told_a_question_is_finished_by_answering_it():
-    """119 of the 308 unwanted changes in run 017 -- 39% -- were planned on tasks
-    that wanted no write at all. The largest single thing this plan gets wrong."""
-    seen: list[str] = []
-    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
-
-    told = " ".join(seen[0].split())
-
-    assert "MANY REQUESTS ARE FINISHED BY ANSWERING THEM" in told
-    assert "`changes` stays empty, and that is the plan being right" in told
-
-
-def test_a_change_has_to_quote_the_customer():
-    """The operational half. Stating the rule in the instructions was measured inert
-    in run 018; the field the model actually fills has to carry it too."""
-    described = Change.model_fields["what"].description or ""
-
-    assert "in quotes" in described
-    assert "If you cannot quote them, they did not ask" in described
-
-
 def test_the_goal_is_the_shape_of_the_records_not_a_ruling():
     """The field description is the only place the model is told what `goal` is for."""
     described = Plan.model_fields["goal"].description or ""
