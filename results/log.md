@@ -43,6 +43,7 @@ not comparable to one that lost none.
 | 019 | `run019` | planner: REPLACE + quote rule + `performable`. Surplus writes 26 → 7; plan recall 72.9% → 63.3% | 1 | 0.620 | 0.620 | — | — | — | 50/50 |
 | 020 | `run020` | planner: every write workflow names its tool; commit-after-lookup; one verdict per record. **Regression, −0.050 paired.** | 2 | 0.530 ±0.050 | 0.530 | 0.360 | — | — | 100/100 |
 | 021 | `run021` | planner: brake removed, `recap`/`before` carries the last plan's goal forward. **No effect, stopped at 44.** | 2 | 0.432 (partial) | — | — | — | — | 44/100 |
+| 023 | `run023` | 017 + `performable`/`misfiled` + every write workflow naming its tool. **Surplus cut 37%, recall fell 9pp, −0.061 paired.** | 2 | 0.515 ±0.050 | 0.515 | — | — | — | 99/100 |
 
 ## How runs are named
 
@@ -1069,3 +1070,61 @@ addition was locally justified by a real defect read out of real plans — the
 blanket verdict — and the aggregate is still a model that finds out more and
 commits less. That is the hypothesis run 022 tests, and the only one that fits
 every row.
+
+## Run 023 — the surplus question answered, the reward question not
+
+Built from run 017 with exactly two things added: `performable`/`misfiled`, and
+every write workflow naming the tool it ends in. None of the prose from runs 019,
+020 or 021.
+
+**Paired against 017 over 99 shared (task, trial) pairs: −0.061 ±0.047.**
+Solved 51 against 57. The fifth consecutive build that fails to beat run 017.
+
+| | 023 | 017 (same pairs) |
+|---|---|---|
+| reward | 0.515 ±0.050 | — |
+| DB | 0.564 | — |
+| COMMUNICATE | 0.915 | — |
+| gold write | 49% | 58% |
+| gold read | 89% | 84% |
+| **surplus writes/sim** | **0.242** | **0.384** |
+
+**What this run settles.** Run 019's reward came entirely from surplus writes
+falling while gold writes stayed flat, and it had been an assumption — never a
+measurement — that `performable`/`misfiled` caused that rather than the quote rule
+shipped beside them. This build carries the code and not the rule, and on the 50
+pairs shared with 019 surplus came out at **0.220 against 0.220**, identical. The
+deterministic filter did all of it. The quote rule contributed nothing.
+
+That is worth keeping on its own: a 37% cut in surplus writes, from code, with no
+prompt cost.
+
+**Why it still lost.** Gold writes fell 58% → 49% on the same pairs. DB needs
+every gold write *and* no surplus one, so 0.14 fewer surplus writes per simulation
+did not pay for nine points of recall.
+
+**A method note, against myself.** This run was read at 32 simulations (−0.062,
+called a regression), at 51 (−0.020, called flat and recovering), and at 99
+(−0.061). Two of those three readings were wrong, in opposite directions, and this
+file already records why: tau2 runs tasks roughly in order and this domain's tail
+is much easier, so a partial slice is biased even when the comparison is paired,
+because the *pairs available* are not a random sample of tasks. Partial runs of
+this benchmark should not be read for direction at all.
+
+### The standing tally against run 017
+
+| build | paired vs 017 | pairs |
+|---|---|---|
+| 019 | +0.060 ±0.053 | 50 |
+| 020 | −0.050 ±0.039 | 100 |
+| 021 | −0.114 ±0.067 | 44 |
+| 023 | −0.061 ±0.047 | 99 |
+
+Five builds, none better. Run 017 stands.
+
+### `--timeout` does not stop a wedged simulation
+
+Run 023 was launched with `--timeout 1800` specifically to reclaim the worker slot
+that a hang costs. A simulation ran to **2643s** and was still running when the run
+was killed. Whatever that flag bounds, it is not this. The worker-starvation
+problem recorded above is still open.
