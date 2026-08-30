@@ -41,7 +41,7 @@ not comparable to one that lost none.
 | **017** | `steps1234_50x3` | `ea1e6ac`: gate given the request, the consent, the provenance. **Best run in the project.** | 3 | **0.560 ±0.023** | 0.560 | 0.460 | 0.400 | — | 150/150 |
 | 018 | `planner17` | planner: REPLACE + scope + record, 17 targeted tasks. **Aborted at 20/51 — regression.** | 3 | 0.150 (partial) | — | — | — | — | 20/51 |
 | 019 | `run019` | planner: REPLACE + quote rule + `performable`. Surplus writes 26 → 7; plan recall 72.9% → 63.3% | 1 | 0.620 | 0.620 | — | — | — | 50/50 |
-| 020 | `run020` | planner: every write workflow names its tool; commit-after-lookup; one verdict per record | 2 | *pending* | — | — | — | — | — |
+| 020 | `run020` | planner: every write workflow names its tool; commit-after-lookup; one verdict per record. **Regression, −0.050 paired.** | 2 | 0.530 ±0.050 | 0.530 | 0.360 | — | — | 100/100 |
 
 ## How runs are named
 
@@ -933,4 +933,43 @@ all this shape.
 |---|---|---|---|---|---|---|
 | 017 (baseline, 50×3) | 0.560 ±0.023 | — | — | 42.9% | 86.0% | best in project |
 | 019 (50×1) | 0.620 | 0.640 | 0.920 | 40.8% | 69.9% | surplus writes 26 → 7 |
-| 020 (50×2) | *pending* | | | | | this section's changes |
+| 020 (50×2) | 0.530 ±0.050 | 0.566 | 0.909 | 43.9% | — | **paired −0.050 ±0.039 vs 017** |
+
+### Run 020's verdict: one hallucination killed, one brake added by mistake
+
+**Paired against run 017 over all 100 shared (task, trial): −0.050 ±0.039.**
+Five simulations better, ten worse, 85 unchanged. Not significant at this design's
+resolution, but the point estimate is negative and every supporting number agrees
+with it: gold-write recall 51.7% → 43.9%, surplus writes per simulation 0.373 →
+0.500, plan-level gold naming 68.7% → 61.1%.
+
+**What worked.** Naming `update_reservation_flights` in the cabin workflow
+eliminated the `update_reservation_cabin` hallucination completely — 0.069 entries
+per plan in run 017, **0.000** in run 020, about 150 phantom commitments gone.
+`book_reservation` recall went 40.0% → 70.0% and handoffs planned fell 0.023 →
+0.018 per plan. The tool-naming half of this change is worth keeping.
+
+**What broke, and it was one sentence.** The paragraph written against task 44's
+determine-loop contained *"A record you have not read yet is a line in `lookups`,
+not an entry."* That is a brake on naming changes, sitting inside a change whose
+whole purpose was to get more of them named. Goals opening with "determine" went
+**0.185 → 0.295 per plan (+59%)** and plans with empty `changes` went **37% →
+42%** — the determine-loop got worse, not better, and it got worse by the amount
+the new sentence discouraged. The three tools the workflows now name are planned
+more often (baggages +41%, passengers +18%, book +90%) and executed *less*
+successfully, because the plans that would have carried them out are the ones
+that stayed empty a turn longer.
+
+Recall by tool, run 017 → run 020, which is the clearest statement of the trade:
+
+| tool | 017 | 020 |
+|---|---|---|
+| `book_reservation` | 40.0% | **70.0%** |
+| `cancel_reservation` | 42.4% | 50.0% |
+| `update_reservation_flights` | 56.7% | **32.5%** |
+| `update_reservation_passengers` | 77.8% | **33.3%** |
+| `update_reservation_baggages` | 60.0% | **30.0%** |
+
+A correction to this file's earlier note: the "4× more" figure taken mid-run
+compared run 020 against run 019's *partial* journal and did not survive the full
+one. The real movements are the table above.
