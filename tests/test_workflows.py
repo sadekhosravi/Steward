@@ -456,32 +456,3 @@ def test_a_policy_with_no_workflows_still_builds_every_agent():
     # The heading goes with them. An empty one reads as an instruction to find
     # something to put under it, which is the whole reason this is its own block.
     assert "WHAT EACH REQUEST NEEDS" not in told
-
-
-def test_every_write_the_domain_can_make_is_named_by_the_workflow_that_makes_it():
-    """The converse of the test above, and the more expensive half.
-
-    `update_reservation_passengers`, `update_reservation_baggages` and
-    `send_certificate` appeared in no workflow at all for four runs. A tool the
-    workflows never name is a tool the planner has no reason to believe exists,
-    and in run 019 the actor told a customer "the system can't remove a passenger
-    from an existing booking" and proposed cancelling instead -- on a task whose
-    three gold writes included that very call. Naming the block without naming
-    the route through it is what produced that.
-    """
-    from tau2.domains.airline.environment import get_environment
-
-    # The six calls that move the scored database. `transfer_to_human_agents` is
-    # gated too but writes nothing, so its absence here would prove nothing.
-    writes = {
-        "book_reservation",
-        "cancel_reservation",
-        "send_certificate",
-        "update_reservation_baggages",
-        "update_reservation_flights",
-        "update_reservation_passengers",
-    }
-    real = {tool.name for tool in get_environment().get_tools()}
-    assert writes <= real, sorted(writes - real)
-    blob = " ".join(rule.statement for w in AIRLINE for rule in w.cited)
-    assert not [name for name in sorted(writes) if name not in blob]

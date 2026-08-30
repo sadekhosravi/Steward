@@ -18,15 +18,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 from agents.gate import transcript
-from agents.planner import (
-    INSTRUCTIONS,
-    Plan,
-    brief,
-    build_planner,
-    catalogue,
-    recap,
-    render,
-)
+from agents.planner import Plan, brief, build_planner, catalogue, render
 from core.kernel import REPLAN_LIMIT, Act, Kernel, Say
 from core.state import Change
 from tests.tools import CANCEL, LOOKUP
@@ -119,6 +111,33 @@ def test_the_planner_is_told_something_else_does_the_refusing():
     build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
 
     assert "checked against this policy before it runs" in seen[0]
+
+
+def test_the_permission_asymmetry_is_fenced_off_from_scope():
+    """The push to plan a change even when the policy is doubtful is deliberate, and
+    it was being read as licence to plan changes nobody asked for. 44 of the 51
+    surplus writes in the last full run were written down in a plan first; the actor
+    freelanced once in 150 simulations."""
+    seen: list[str] = []
+    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
+
+    told = " ".join(seen[0].split())
+
+    assert "THAT IS ABOUT PERMISSION. IT IS NOT ABOUT SCOPE" in told
+    assert "If you cannot find the sentence, delete the entry" in told
+    assert "the policy permits almost every change nobody asked for" in told
+
+
+def test_the_planner_is_told_a_question_is_finished_by_answering_it():
+    """119 of the 308 unwanted changes in run 017 -- 39% -- were planned on tasks
+    that wanted no write at all. The largest single thing this plan gets wrong."""
+    seen: list[str] = []
+    build_planner([LOOKUP, CANCEL], POLICY, FunctionModel(_captures(seen))).run_sync("plan this")
+
+    told = " ".join(seen[0].split())
+
+    assert "MANY REQUESTS ARE FINISHED BY ANSWERING THEM" in told
+    assert "`changes` stays empty, and that is the plan being right" in told
 
 
 def test_a_change_has_to_quote_the_customer():
@@ -580,67 +599,3 @@ def test_a_second_request_is_added_to_the_first_not_swapped_for_it():
 
     assert "keep both" in case
     assert "no longer want it" in case
-
-
-def test_the_next_plan_is_shown_the_goal_the_last_one_set():
-    """Run 020: 42% of plans named no change at all and goals opening with
-    "determine" ran at 0.295 per plan -- task 44 wrote six consecutive plans
-    meaning collect, calculate, determine, while every fact it had asked for was
-    already in hand. The planner is a fresh call each time and could not tell a
-    first attempt at a question from a fourth."""
-    plan = Plan(goal="Determine which reservations qualify", lookups=["get_reservation_details"])
-    case = brief([], "cancel my flights", before=recap(plan))
-
-    assert "Determine which reservations qualify" in case
-    assert "get_reservation_details" in case
-    assert "standing still" in case
-
-
-def test_the_recap_leaves_the_changes_out():
-    """They reach the next plan already, as the changes still owed. Listing them
-    here too would show one commitment twice and invite it being planned twice."""
-    plan = Plan(
-        goal="Cancel the reservation",
-        changes=[Change(tool="cancel_reservation", record="ABC123", what="cancel it")],
-    )
-    assert "ABC123" not in recap(plan)
-    assert "Cancel the reservation" in recap(plan)
-
-
-def test_nothing_is_shown_before_the_first_plan():
-    """A heading with nothing under it reads as an instruction to find something to
-    put there -- the same reason `render` leaves empty sections out."""
-    assert recap(Plan(goal="")) == ""
-    assert "WHAT YOU PLANNED LAST TIME" not in brief([], "hello", before="")
-
-
-def test_the_brake_that_run_020_measured_is_gone():
-    """ "A record you have not read yet is a line in `lookups`, not an entry" was
-    written to stop the planner guessing records. It sat inside a change whose
-    whole purpose was to get more changes named, and it read as permission to keep
-    finding out: determine-goals rose 0.185 -> 0.295 per plan and empty-`changes`
-    plans 37% -> 42%, against a paired reward of -0.050."""
-    seen = " ".join(INSTRUCTIONS.split())
-    assert "is a line in `lookups`, not an entry" not in seen
-
-
-def test_the_second_plan_of_a_turn_is_shown_the_first_one_s_goal():
-    """End to end: `_plan` records `recap(plan)` on the state and `brief` reads it
-    back. The unit tests above prove the two halves; this proves they are joined,
-    which is the part a signature change silently breaks."""
-    planner, planned = _counted(_plans_the_goal)
-    k = Kernel(
-        [LOOKUP],
-        policy=POLICY,
-        model=FunctionModel(_looks_up_then_reports),
-        planner_model=FunctionModel(planner),
-    )
-    thread = k.new_thread()
-
-    paused = k.send(thread, "cancel HKD3PS")
-    assert isinstance(paused, Act)
-    k.resume(thread, {paused.calls[0].id: "HKD3PS: economy"})
-
-    assert len(planned) == 2
-    assert "WHAT YOU PLANNED LAST TIME" not in planned[0]
-    assert f"Goal you set: {GOAL}" in planned[1]

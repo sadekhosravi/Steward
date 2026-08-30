@@ -291,6 +291,84 @@ your job and not the reviewer's -- it only ever answers the move it is shown.
 Do not plan a handoff to a human either: a refusal is the assistant's own to give,
 and a handoff ends the conversation with everything else still undone.
 
+THAT IS ABOUT PERMISSION. IT IS NOT ABOUT SCOPE
+
+What you have just read holds for whether a change is ALLOWED. It does not hold
+for whether it was ASKED FOR. Those go opposite ways.
+
+A change the policy forbids is stopped before it runs, and the customer gets an
+explanation. A change nobody asked for is stopped by nobody, because there is no
+rule against it. It runs. A record the customer never mentioned is now different,
+and it cannot be put back.
+
+**So `what` begins with the customer's own words.** Before you write an entry in
+`changes`, find the sentence where they asked for it, and start `what` by quoting
+it: `"cancel my Boston flight" -- cancel it and refund to the original card`. If
+you cannot find the sentence, delete the entry. That is the whole test, and it is
+the only one that matters here: not whether the change seems sensible, not whether
+the policy allows it, but whether anybody asked.
+
+MANY REQUESTS ARE FINISHED BY ANSWERING THEM
+
+Roughly half the customers here want to be told something, not to have something
+changed. "What do I have booked", "what would it cost to move to business", "am I
+allowed to cancel this", "how much is on my gift cards" -- the work is the lookup
+and the reply. `changes` stays empty, and that is the plan being right.
+
+This is the single largest thing this plan gets wrong. Answer a question with a
+cancellation and the answer was still wrong even though the cancellation worked.
+
+Three ways it happens, all of them from the last full run:
+
+  - A price question read as an instruction. "What would it cost" is a lookup and
+    a sentence, never a booking. If they then say do it, you will be asked again.
+  - A record met along the way. get_user_details returns everything they hold. The
+    four reservations you did not come here about are not part of the request.
+  - A problem you noticed and they did not raise, or a kindness -- a waived fee, a
+    free bag, an upgrade. Helpful and unasked-for is still unasked-for.
+
+A record you are unsure about is a question, not an entry: say what you need in
+`lookups`, or put the question in `confirm`. Do not write the entry and leave it
+to be caught later. It will not be -- the review that follows you asks whether the
+policy permits the change, and the policy permits almost every change nobody
+asked for.
+
+
+A CHANGE THAT CANNOT BE AN UPDATE IS STILL A CHANGE
+
+Five things cannot be done to a reservation that already exists. The workflow
+"Replace a reservation" below lists them with the policy line each comes from.
+
+None of them is a no. Each means the same thing: the change is a
+`cancel_reservation` followed by a `book_reservation` -- two entries in `changes`,
+not zero.
+
+This is where a request is most often lost outright. "Basic economy flights cannot
+be modified" reads like the end of the matter, so the turn ends in an apology --
+or an `update_reservation_flights` call goes out anyway, because the tool accepts
+it. The policy says the tool does not check. Knowing the route is a different one
+is your job.
+
+  A basic economy round trip, same dates, wanted in business on the cheapest
+  flights. Not a cabin change: a cabin change may not move the flights. Not a
+  flight change: basic economy flights cannot be modified. Plan the replacement
+  flights and their business fare, check the reservation can be cancelled at all,
+  confirm the refund and the new total, then cancel, then book.
+
+  One reservation for three passengers, wanted as three so each traveller can use
+  their own certificate. The count on a record cannot move, and a human agent
+  cannot move it either. Plan one cancel and three books, one per passenger.
+
+Do not ask which route they want. Which one the policy allows is not theirs to
+know and is not a choice on offer -- deciding it is what this plan is for. What
+goes in `confirm` is what they must agree to: that the change cannot be made to
+the reservation they have, what the old one refunds, what the new one costs, and
+the difference. One decision, put once.
+
+Check the cancellation on its own terms first. Needing to re-book is not a ground
+for cancelling. If none of the four conditions holds, plan what is actually open --
+a cabin change that leaves the flights alone is often what was wanted anyway.
+
 {workflows}
 
 WHICH RULES APPLY
@@ -367,19 +445,6 @@ STANDING = (
     "Drop part of it only where they have said they no longer want it."
 )
 ARRIVED = "WHAT JUST CAME BACK, SINCE THE LAST PLAN"
-# The planner has no memory between calls, so without this it cannot tell a first
-# attempt at a question from a fourth. Run 020 measured what that costs: goals
-# opening with "determine" ran at 0.295 per plan and 42% of plans named no change
-# at all, and task 44 wrote six consecutive plans meaning the same thing --
-# collect, calculate, determine -- while every fact it had asked for was already
-# in hand.
-BEFORE = (
-    "WHAT YOU PLANNED LAST TIME, AND WHAT YOU ASKED TO FIND OUT\n"
-    "You have already planned this conversation once. Where what you asked for "
-    "has come back, this plan does not ask for it again: it says what to do with "
-    "the answer. Writing a goal you have already written is this plan standing "
-    "still."
-)
 DONE = "CHANGES ALREADY MADE IN THIS CONVERSATION"
 OWED = (
     "CHANGES THIS CONVERSATION HAS ALREADY COMMITTED TO AND NOT YET MADE\n"
@@ -446,7 +511,6 @@ def brief(
     done: list[Written] | None = None,
     owed: list[Change] | None = None,
     standing: str = "",
-    before: str = "",
 ) -> str:
     """The case put to the planner: what has happened, and what was just asked.
 
@@ -472,8 +536,6 @@ def brief(
     )
     if standing:
         case = f"{case}\n\n{STANDING}\n{standing}"
-    if before:
-        case = f"{case}\n\n{BEFORE}\n{before}"
     if arrived:
         results = "\n".join(f"- {' '.join(str(text).split())}" for text in arrived.values())
         case = f"{case}\n\n{ARRIVED}\n{results}"
@@ -483,18 +545,6 @@ def brief(
     if owed:
         case = f"{case}\n\n{OWED}\n" + "\n".join(f"- {line}" for line in _lines(owed))
     return case
-
-
-def recap(plan: Plan) -> str:
-    """What this plan meant to do, for the next plan to read before repeating it.
-
-    The goal and the lookups only. `changes` reach the next call already, as the
-    changes still owed, and listing them here too would show one commitment twice.
-    """
-    lines = [f"Goal you set: {plan.goal}"] if plan.goal else []
-    if plan.lookups:
-        lines += ["You asked to find out:", *(f"- {line}" for line in plan.lookups)]
-    return "\n".join(lines)
 
 
 def render(plan: Plan) -> str:

@@ -93,7 +93,7 @@ from pydantic_core import to_jsonable_python
 import tracing
 from agents.assistant import Assistant, build_assistant
 from agents.gate import Verdict, build_gate, decide, review, transcript
-from agents.planner import Plan, brief, build_planner, recap, render
+from agents.planner import Plan, brief, build_planner, render
 from agents.speaker import HELD, build_speaker, hold, outstanding, permit
 from core.policy import excerpt
 from core.state import (
@@ -305,7 +305,6 @@ def _plan(
                 state.written,
                 owed,
                 state.request,
-                state.before,
             )
         ).output
     except UnexpectedModelBehavior:
@@ -368,10 +367,6 @@ def _plan(
         # has already held a reply against.
         "ruled_out": _rule_out(ruled_out, carried, state.written, evidence, panel, planned),
         "replans": spent,
-        # Only the goal and what it asked to find out. Not `changes` -- those
-        # already reach the next plan as `owed`, and saying them twice would make
-        # a commitment look like two.
-        "before": recap(plan),
     }
 
 
