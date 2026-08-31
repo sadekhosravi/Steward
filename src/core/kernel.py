@@ -106,8 +106,6 @@ from core.state import (
     Written,
     anchored,
     answered,
-    misfiled,
-    performable,
     pruned,
 )
 from core.verifiers import Evidence, Panel, Planned, first
@@ -249,8 +247,6 @@ def _plan(
     state: StewardState,
     planner: Agent[None, Plan],
     policy: str,
-    gated: frozenset[str] = frozenset(),
-    known: frozenset[str] = frozenset(),
     panel: Panel | None = None,
     planned: Planned | None = None,
 ) -> dict[str, Any]:
@@ -326,18 +322,7 @@ def _plan(
     # identifier makes every re-phrasing of one commitment a new one, and the
     # ledger it inflates is the ledger the speaker and the critic both count
     # against -- see `anchored`.
-    # A tool this domain cannot call is dropped before the record is anchored:
-    # `anchored` and `_widen` both key on `Change.key`, so an unperformable entry
-    # that gets past here is a debt nothing can ever discharge -- see `performable`.
-    # A read among them keeps its instruction, moved to the field that carries one.
-    changes = anchored(
-        performable(plan.changes, gated) if gated else plan.changes, state.observed + seen
-    )
-    plan = (
-        plan.model_copy(update={"lookups": plan.lookups + misfiled(plan.changes, gated, known)})
-        if gated
-        else plan
-    )
+    changes = anchored(plan.changes, state.observed + seen)
     # Only the customer can change what the customer is asking for. A mid-turn
     # re-plan is a response to a lookup, and a lookup is the one thing that must
     # not be able to rewrite the scope -- it is what narrowed the request to the
@@ -890,7 +875,6 @@ def build_graph(
     planner: Agent[None, Plan],
     speaker: Agent[None, Verdict],
     gated: frozenset[str],
-    known: frozenset[str],
     schemas: dict[str, dict[str, Any]],
     policy: str,
     panel: Panel,
@@ -901,15 +885,7 @@ def build_graph(
         "plan",
         _traced(
             "plan",
-            partial(
-                _plan,
-                planner=planner,
-                policy=policy,
-                gated=gated,
-                known=known,
-                panel=panel,
-                planned=planned,
-            ),
+            partial(_plan, planner=planner, policy=policy, panel=panel, planned=planned),
         ),
     )
     graph.add_node("think", _traced("think", partial(_think, assistant=assistant, schemas=schemas)))
@@ -1005,7 +981,6 @@ class Kernel:
             build_planner(tools, policy, planner_model if planner_model is not None else model),
             build_speaker(policy, speaker_model if speaker_model is not None else model),
             _gated(tools),
-            frozenset(t.name for t in tools),
             _schemas(tools),
             policy,
             panel or Panel(),

@@ -40,9 +40,7 @@ __all__ = [
     "answered",
     "duplicated",
     "invented",
-    "misfiled",
     "mispriced",
-    "performable",
     "pruned",
     "quoted",
     "sources",
@@ -193,14 +191,11 @@ class Change(BaseModel):
     what: str = Field(
         default="",
         description=(
-            "What this call has to change about that record, in a few words. Begin "
-            "with the customer's own words asking for it, in quotes, then the "
-            'instruction: \'"cancel my Boston flight" -- cancel it and refund to the '
-            "original card'. If you cannot quote them, they did not ask, and the "
-            "entry does not belong here. The assistant reads the rest as its "
-            "instruction, so write it as one. Do not put the identifier here -- it "
-            "belongs in `record`, and an identifier written only here leaves this "
-            "change indistinguishable from every other change to the same tool."
+            "What this call has to change about that record, in a few words. The "
+            "assistant reads it as its instruction, so write it as one. Do not put "
+            "the identifier here -- it belongs in `record`, and an identifier "
+            "written only here leaves this change indistinguishable from every "
+            "other change to the same tool."
         ),
     )
 
@@ -217,53 +212,6 @@ class Change(BaseModel):
 # `2024` and `the` do not. This is a heuristic and is only ever used to *discard*
 # a record the ledger could not have matched on anyway -- see `anchored`.
 TOKEN = re.compile(r"[A-Za-z0-9_]{5,}")
-
-
-def performable(changes: list[Change], gated: frozenset[str]) -> list[Change]:
-    """Changes whose `tool` is a write this domain actually has.
-
-    `changes` is the list of writes the request needs, and the planner files three
-    other things in it. Over run 017's 148 simulations, of 404 entries: 23 named a
-    lookup or a handoff -- `get_reservation_details`, `search_direct_flight`,
-    `calculate`, `transfer_to_human_agents` -- and 7 named a tool that does not
-    exist, six of them `update_reservation_cabin`, which is the model reasoning
-    from the policy's "Change cabin" heading to a call to match it. There is no
-    such call; cabin is an argument to `update_reservation_flights`.
-
-    Both kinds are worse than noise. A change is a debt: `outstanding` keeps it
-    owed until an approved call discharges it, and neither a read nor a tool
-    nobody can call ever will. The speaker then holds a reply against work that
-    cannot be done, and the planner is asked again and re-files it. One entry
-    naming `calculate` is a turn that cannot end.
-
-    Dropping rather than repairing, because the repair is a guess. A planner that
-    wrote `update_reservation_cabin` may have meant a cabin change, or a flight
-    change, or both, and inventing the difference here would put a write into the
-    ledger that nobody asked for -- which is the failure this whole seam exists to
-    stop. What is dropped is not lost: the planner is asked again on the next
-    lookup, holding the same request.
-    """
-    return [change for change in changes if change.tool in gated]
-
-
-def misfiled(changes: list[Change], gated: frozenset[str], known: frozenset[str]) -> list[str]:
-    """The lookups a plan filed as changes, as lines for `Plan.lookups`.
-
-    `performable` drops them, and dropping alone would lose the one thing the entry
-    got right: that the actor has to call this tool. Reads have their own field --
-    `lookups` is rendered to the actor as "Find out first" -- so the fix is to move
-    the line rather than delete it, and the plan says the same thing in the field
-    that can carry it.
-
-    Only tools this domain actually has. A change naming `update_reservation_cabin`
-    is not a misplaced lookup, it is a call nobody can make, and putting it under
-    "Find out first" would send the actor after a tool that does not exist.
-    """
-    return [
-        f"{change.tool}: {change.what}".rstrip(": ")
-        for change in changes
-        if change.tool not in gated and change.tool in known
-    ]
 
 
 def anchored(changes: list[Change], seen: list[str]) -> list[Change]:
